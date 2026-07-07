@@ -192,33 +192,37 @@ def run_llm_checks(
     """
     client = OpenRouterClient(db=db)
 
+    # subject_data is filtered: image_url is an internal creative-pipeline detail
+    # (which real photo, if any, was used as a Higgsfield reference) — it is not
+    # part of the product's factual data and null is an expected, normal state
+    # (scrape unavailable -> text-only generation), not a defect to grade.
+    subject_data = {k: v for k, v in subject.items() if k != "image_url"}
+
     review_payload = {
         "content_type": content_type,
         "title": copy.get("title"),
         "description": copy.get("description"),
         "keywords": copy.get("keywords"),
         "link": copy.get("link") or copy.get("link_or_null"),
-        "subject_data": subject,
-        "image": {
-            "width": image_meta.get("width"),
-            "height": image_meta.get("height"),
-            "has_text_overlay": True,
-        },
+        "subject_data": subject_data,
     }
     if content_type == "affiliate":
         criteria = (
             "Checks: (a) does the copy match the actual product data with NO "
             "hallucinated features; (b) is the affiliate copy appropriate and "
-            "honest; (c) given the dimensions and that a title text overlay was "
-            "added, is the image plausibly legible. Fail if copy claims features "
-            "not present in subject_data."
+            "honest. Fail if copy claims features not present in subject_data. "
+            "You are NOT shown the actual pin image — do not comment on or fail "
+            "for image content, legibility, or missing image URLs; that is "
+            "verified separately by deterministic checks."
         )
     else:
         criteria = (
             "Checks: (a) does the content avoid ANY product mention, CTA, sales "
-            "language, or link; (b) is it genuine niche value content; (c) is the "
-            "image plausibly a clean aesthetic image with legible overlay. Fail if "
-            "any sales/CTA/link language appears."
+            "language, or link; (b) is it genuine niche value content. Fail if "
+            "any sales/CTA/link language appears. You are NOT shown the actual "
+            "pin image — do not comment on or fail for image content, "
+            "legibility, or missing image URLs; that is verified separately by "
+            "deterministic checks."
         )
 
     user_prompt = (

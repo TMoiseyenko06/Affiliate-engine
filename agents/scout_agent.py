@@ -60,39 +60,75 @@ def _fetch_candidates(niche: str) -> List[Dict[str, Any]]:
 
 
 def _seed_candidates(niche: str) -> List[Dict[str, Any]]:
-    """Deterministic seed candidates keyed loosely by niche."""
+    """Fallback candidates used only when PRODUCT_SOURCE_URL is not configured.
+
+    These are REAL, verified ASINs (checked against live Amazon listings), not
+    invented placeholders — earlier versions of this list used made-up ASINs
+    that don't resolve to real products, which produced hallucinated copy and
+    broken affiliate links. Each entry carries a real ``features`` list so the
+    copywriter has actual product facts to write from instead of a bare title.
+
+    This is still a small, static, hand-checked set meant to make the pipeline
+    runnable out of the box — listings go stale (delisted, repriced). For
+    ongoing production use, configure PRODUCT_SOURCE_URL to point at a real,
+    current product feed (ideally backed by the Amazon Product Advertising API).
+    """
     base = [
         {
-            "product_id": "B08XYZHOME1",
-            "title": "Stackable Clear Storage Bins with Lids (6-pack)",
+            "product_id": "B0CJFY5FM9",
+            "title": "ThreeKin 230 Black Spice Labels - Waterproof & Oil-Resistant Pre-Printed Stickers",
             "category": "home_organization",
             "commission_rate": 0.04,
             "trend_signal": "rising",
-            "source_url": "https://www.amazon.com/dp/B08XYZHOME1",
+            "source_url": "https://www.amazon.com/dp/B0CJFY5FM9",
+            "features": [
+                "230 pre-printed spice labels",
+                "waterproof and oil-resistant",
+                "BPA-free",
+                "easy-clean, no-residue removal",
+            ],
         },
         {
-            "product_id": "B09ABCKITCH2",
-            "title": "Bamboo Drawer Organizer Set",
+            "product_id": "B09V5MBSDX",
+            "title": "Amazon Basics Plastic Storage Containers with Secure Latching Lids, Set of 10",
+            "category": "home_organization",
+            "commission_rate": 0.04,
+            "trend_signal": "steady",
+            "source_url": "https://www.amazon.com/dp/B09V5MBSDX",
+            "features": [
+                "set of 10 stackable bins",
+                "5 quart capacity each",
+                "secure latching lids",
+                "clear body with grey lids",
+            ],
+        },
+        {
+            "product_id": "B07DFBSTFR",
+            "title": "IRIS USA 20-Pack Storage Bins with Lids, 6 Quart, Clear Stackable Containers",
+            "category": "home_organization",
+            "commission_rate": 0.045,
+            "trend_signal": "rising",
+            "source_url": "https://www.amazon.com/dp/B07DFBSTFR",
+            "features": [
+                "20-pack, 6 quart each",
+                "clear see-through stackable containers",
+                "latching lids",
+                "BPA-free plastic",
+            ],
+        },
+        {
+            "product_id": "B088WCT93C",
+            "title": "ROYAL CRAFT WOOD 5-Piece Bamboo Drawer Organizer Set",
             "category": "kitchen",
             "commission_rate": 0.03,
             "trend_signal": "steady",
-            "source_url": "https://www.amazon.com/dp/B09ABCKITCH2",
-        },
-        {
-            "product_id": "B07DEFDESK3",
-            "title": "Minimalist Desk Cable Management Tray",
-            "category": "home_office",
-            "commission_rate": 0.045,
-            "trend_signal": "rising",
-            "source_url": "https://www.amazon.com/dp/B07DEFDESK3",
-        },
-        {
-            "product_id": "B06GHILABEL4",
-            "title": "Reusable Pantry Label Set (150 labels)",
-            "category": "home_organization",
-            "commission_rate": 0.05,
-            "trend_signal": "hot",
-            "source_url": "https://www.amazon.com/dp/B06GHILABEL4",
+            "source_url": "https://www.amazon.com/dp/B088WCT93C",
+            "features": [
+                "5-piece nesting bamboo tray set",
+                "multi-use: kitchen, bathroom, office, makeup, jewelry",
+                "natural bamboo construction",
+                "fits standard drawer widths",
+            ],
         },
     ]
     return base
@@ -171,9 +207,8 @@ def _rank_with_llm(
     if extra_context:
         user_prompt += f"Additional context (address this):\n{extra_context}\n\n"
     user_prompt += (
-        "Respond with a JSON object for the winning candidate ONLY, with exactly "
-        "these keys: product_id, title, category, commission_rate, trend_signal, "
-        "source_url. Copy values from the chosen candidate; do not invent products."
+        'Respond with a JSON object containing ONLY the winning candidate\'s '
+        '"product_id" — do not repeat or restate any other fields.'
     )
 
     try:
@@ -187,14 +222,13 @@ def _rank_with_llm(
         logger.error("Scout LLM ranking failed, falling back to heuristic: %s", exc)
         return None
 
-    # Validate the LLM actually returned one of our candidates.
+    # The LLM chooses which product wins; we never trust it to reproduce that
+    # product's data (name, features, price, etc.) — pulling the untouched
+    # original candidate avoids any risk of the LLM mangling real product facts.
     valid_ids = {c["product_id"] for c in candidates}
     if result.get("product_id") not in valid_ids:
         logger.warning("Scout LLM returned unknown product_id; using heuristic")
         return None
 
-    # Backfill any missing fields from the source candidate to be safe.
     source = next(c for c in candidates if c["product_id"] == result["product_id"])
-    for key in ("title", "category", "commission_rate", "trend_signal", "source_url"):
-        result.setdefault(key, source.get(key))
-    return result
+    return dict(source)
