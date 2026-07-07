@@ -93,11 +93,24 @@ All secrets are read from the environment — **never hardcoded**. See
 | `DATABASE_URL` | no | defaults to `sqlite:///affiliate_engine.db` |
 | `ALERT_FILE_PATH`, `DEADMAN_HOURS`, `ALERT_WEBHOOK_URL` | no | alerting |
 
-Load them before running:
+**Loading them:** the app auto-loads a `.env` file from the working directory
+at startup (dependency-free, cross-platform) — just create `.env` and run.
+Values already set in the real environment take precedence over the file, so
+you can still override per-run:
+
+```powershell
+# Windows PowerShell — override a single value for one run
+$env:OPENROUTER_API_KEY = "sk-or-..."
+python run_cycle.py --dry-run
+```
 
 ```bash
-set -a; source .env; set +a
+# macOS/Linux — .env is loaded automatically; this only overrides it
+export OPENROUTER_API_KEY="sk-or-..."
 ```
+
+Point at a `.env` elsewhere with `DOTENV_PATH=/path/to/.env`. Note that
+`source .env` does **not** work in PowerShell — rely on the auto-loader instead.
 
 ---
 

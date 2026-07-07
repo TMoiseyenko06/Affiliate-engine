@@ -15,6 +15,46 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
+def _load_dotenv(path: str = ".env") -> None:
+    """Load KEY=VALUE lines from a ``.env`` file into ``os.environ``.
+
+    Dependency-free and cross-platform (no need to ``source`` the file, which
+    does not work on Windows PowerShell). Real environment variables always win:
+    a value already set in the process environment is NOT overwritten, so you
+    can still override the file with ``$env:FOO`` / ``export FOO``.
+
+    Silently does nothing if the file is absent. Set ``DOTENV_PATH`` to point at
+    a file elsewhere.
+    """
+    path = os.environ.get("DOTENV_PATH", path)
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                # Support an optional leading "export ".
+                if line.startswith("export "):
+                    line = line[len("export "):]
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                # Strip matching surrounding quotes.
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        # Never let config loading crash the process over a malformed file.
+        pass
+
+
+# Load .env before the CONFIG singleton reads the environment below.
+_load_dotenv()
+
+
 def _env_str(name: str, default: Optional[str] = None) -> Optional[str]:
     val = os.environ.get(name)
     if val is None or val == "":
