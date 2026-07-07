@@ -58,6 +58,7 @@ def compose(
     title: str,
     output_path: Optional[str] = None,
     max_bytes: int = PINTEREST_MAX_IMAGE_BYTES,
+    content_type: str = "",
 ) -> Dict[str, Any]:
     """Overlay ``title`` on the base image and save the result.
 
@@ -73,7 +74,7 @@ def compose(
     if (img.width, img.height) != (PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT):
         img = _cover_resize(img, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)
 
-    _draw_title(img, title)
+    _draw_title(img, title, content_type)
 
     output_path = output_path or (os.path.splitext(base_image_path)[0] + "_final.jpg")
     quality = 90
@@ -119,38 +120,106 @@ def _cover_resize(img: Image.Image, target_w: int, target_h: int) -> Image.Image
     return img.crop((left, top, left + target_w, top + target_h))
 
 
-def _draw_title(img: Image.Image, title: str) -> None:
-    """Draw a legible, wrapped title band near the top of the image."""
+MAX_TITLE_LINES = 3
+# Scrim (gradient shade) never covers more than this fraction of the image,
+# so text can't swallow the whole pin even on very long titles.
+MAX_SCRIM_FRACTION = 0.42
+ACCENT_BAR_HEIGHT = 10
+ACCENT_COLORS = {
+    "affiliate": (232, 122, 65),   # warm terracotta
+    "organic": (92, 138, 108),     # sage green
+}
+DEFAULT_ACCENT = (210, 175, 90)    # muted gold
+
+
+def _fit_title(
+    draw: ImageDraw.ImageDraw, title: str, width: int
+) -> Tuple[ImageFont.FreeTypeFont, list]:
+    """Pick the largest font size that wraps ``title`` into <= MAX_TITLE_LINES.
+
+    Starts bold and large and shrinks only as far as needed, so most titles
+    render big and confident rather than defaulting to a small safe size.
+    """
+    max_w = int(width * 0.86)
+    for font_size in range(int(width * 0.11), 27, -4):
+        font = _load_font(font_size)
+        avg_char_w = max(_text_size(draw, "M", font)[0] * 0.62, 1)
+        max_chars = max(6, int(max_w / avg_char_w))
+        lines = textwrap.wrap(title, width=max_chars) or [title]
+        if len(lines) <= MAX_TITLE_LINES:
+            # Re-wrap tightly using measured widths so long words don't clip.
+            lines = _wrap_to_pixels(draw, title, font, max_w)
+            if len(lines) <= MAX_TITLE_LINES:
+                return font, lines
+    # Fallback: smallest size, hard-wrapped, truncate extra lines.
+    font = _load_font(28)
+    lines = _wrap_to_pixels(draw, title, font, max_w)[:MAX_TITLE_LINES]
+    return font, lines
+
+
+def _wrap_to_pixels(draw, text: str, font, max_w: int) -> list:
+    words = text.split()
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if _text_size(draw, candidate, font)[0] <= max_w or not current:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _draw_gradient_scrim(img: Image.Image, top: int, bottom: int) -> None:
+    """Paint a smooth dark-to-transparent gradient band for text legibility."""
+    height = bottom - top
+    if height <= 0:
+        return
+    overlay = Image.new("RGBA", (img.width, height), (0, 0, 0, 0))
+    grad = ImageDraw.Draw(overlay)
+    for row in range(height):
+        # Strong near the anchor edge (top of the band), fading out.
+        t = row / max(height - 1, 1)
+        alpha = int(200 * (1 - t) ** 1.6)
+        grad.line([(0, row), (img.width, row)], fill=(10, 10, 12, alpha))
+    img.paste(overlay, (0, top), overlay)
+
+
+def _draw_title(img: Image.Image, title: str, content_type: str = "") -> None:
+    """Draw a bold, legible title over a gradient scrim near the top of the image."""
     if not title:
         return
     draw = ImageDraw.Draw(img, "RGBA")
     width, height = img.size
 
-    # Choose a font size relative to image width; wrap to fit.
-    font_size = max(36, width // 14)
-    font = _load_font(font_size)
-
-    # Wrap text to roughly the image width.
-    avg_char_w = max(_text_size(draw, "M", font)[0], 1)
-    max_chars = max(8, int((width * 0.85) / avg_char_w))
-    lines = textwrap.wrap(title, width=max_chars) or [title]
-
+    font, lines = _fit_title(draw, title, width)
     line_heights = [_text_size(draw, ln, font)[1] for ln in lines]
-    line_gap = int(font_size * 0.25)
-    total_h = sum(line_heights) + line_gap * (len(lines) - 1)
+    line_gap = int(font.size * 0.3)
+    total_text_h = sum(line_heights) + line_gap * (len(lines) - 1)
 
-    pad = int(font_size * 0.4)
-    band_top = int(height * 0.05)
-    band_bottom = band_top + total_h + pad * 2
+    pad_top = int(font.size * 0.55)
+    pad_bottom = int(font.size * 0.75)
+    band_top = ACCENT_BAR_HEIGHT
+    band_bottom = min(
+        band_top + pad_top + total_text_h + pad_bottom,
+        int(height * MAX_SCRIM_FRACTION),
+    )
 
-    # Semi-transparent band for legibility over any background.
-    draw.rectangle([(0, band_top), (width, band_bottom)], fill=(0, 0, 0, 130))
+    # Accent bar: a small flourish of colour so the pin doesn't read as flat.
+    accent = ACCENT_COLORS.get(content_type, DEFAULT_ACCENT)
+    draw.rectangle([(0, 0), (width, ACCENT_BAR_HEIGHT)], fill=(*accent, 255))
 
-    y = band_top + pad
+    _draw_gradient_scrim(img, band_top, band_bottom)
+
+    y = band_top + pad_top
+    stroke_w = max(2, font.size // 18)
     for ln, lh in zip(lines, line_heights):
         tw, _ = _text_size(draw, ln, font)
         x = (width - tw) // 2
-        # Simple shadow + white fill for contrast.
-        draw.text((x + 2, y + 2), ln, font=font, fill=(0, 0, 0, 200))
-        draw.text((x, y), ln, font=font, fill=(255, 255, 255, 255))
+        draw.text(
+            (x, y), ln, font=font, fill=(255, 255, 255, 255),
+            stroke_width=stroke_w, stroke_fill=(0, 0, 0, 235),
+        )
         y += lh + line_gap

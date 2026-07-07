@@ -98,7 +98,7 @@ def _generate_and_verify(
     db.log_step(attempt_id, "creative", "ok", {"path": base_path})
 
     # 3. Compositor
-    image_meta = compositor_mod.compose(base_path, copy.get("title", ""), )
+    image_meta = compositor_mod.compose(base_path, copy.get("title", ""), content_type=content_type)
     db.log_step(attempt_id, "compositor", "ok", image_meta)
 
     # 4. Verifier
