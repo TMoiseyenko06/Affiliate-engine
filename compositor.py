@@ -31,12 +31,27 @@ class CompositorError(Exception):
     pass
 
 
+_BUNDLED_FONT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "assets", "fonts", "DejaVuSans-Bold.ttf"
+)
+
+
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
-    """Load a TrueType font, falling back to the default bitmap font."""
+    """Load a TrueType font, falling back to the default bitmap font.
+
+    The bundled font (assets/fonts/DejaVuSans-Bold.ttf) is tried first so
+    rendering is identical on Windows/macOS/Linux — relying solely on
+    OS-installed font paths silently produced PIL's ~10px placeholder bitmap
+    font on any machine without one of the hardcoded Linux/Mac paths (e.g.
+    Windows), which is why text rendered far smaller than intended.
+    """
     candidates = [
+        _BUNDLED_FONT_PATH,
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/Library/Fonts/Arial Bold.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "C:\\Windows\\Fonts\\seguisb.ttf",
     ]
     for path in candidates:
         if os.path.exists(path):
@@ -44,7 +59,10 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
                 return ImageFont.truetype(path, size)
             except OSError:
                 continue
-    logger.warning("No TrueType font found; using default bitmap font")
+    logger.warning(
+        "No TrueType font found (bundled font missing?); using default bitmap "
+        "font — text will render far smaller than intended."
+    )
     return ImageFont.load_default()
 
 
