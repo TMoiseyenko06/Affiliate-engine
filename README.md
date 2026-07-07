@@ -109,6 +109,21 @@ this call fails (missing key, budget cap, bad response), it falls back to a
 simpler static prompt that still avoids plain backgrounds — this never blocks
 a cycle, but produces a less specific scene.
 
+Both the scene prompt and the copywriter are also steered toward **native,
+authentic-feeling content rather than ad-like content**: the image prompt
+explicitly asks for a candid, slightly-imperfect "real person's phone photo"
+look instead of a staged/glossy commercial shot, and the copywriter's system
+prompt (`agents/copywriter_agent.py::AFFILIATE_SYSTEM_PROMPT`) asks the model
+to write from a relatable, specific, matter-of-fact voice instead of ad-speak
+superlatives ("amazing", "must-have", etc.) — the psychology being that
+specificity and relatability earn clicks on Pinterest, while obvious ad
+language gets scrolled past. This only changes *style*; it never touches
+honesty or disclosure. The Amazon Associates disclosure is still forced into
+every affiliate description verbatim by code regardless of what the LLM
+writes (see `copywriter_agent._write_affiliate`), and the copywriter is still
+hard-required to never invent features, reviews, or stats not present in the
+real product data — the verifier re-checks both independently.
+
 ### Product imagery (affiliate posts)
 
 For affiliate pins, the creative step *can* anchor image generation on the
