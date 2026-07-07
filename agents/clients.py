@@ -199,6 +199,69 @@ class OpenRouterClient:
             raise ApiError(f"Unexpected OpenRouter response shape: {exc}") from exc
         return extract_json(content)
 
+    def generate_image(
+        self,
+        model: str,
+        prompt: str,
+        aspect_ratio: Optional[str] = None,
+        reference_image_url: Optional[str] = None,
+    ) -> bytes:
+        """Generate (or edit) an image via OpenRouter's dedicated Image API.
+
+        Per https://openrouter.ai/docs/features/multimodal/image-generation:
+            POST {base}/images
+            body: {model, prompt, input_references?, aspect_ratio?}
+            response: {data: [{b64_json: "..."}]}
+
+        When ``reference_image_url`` is given, it's passed as an image-to-image
+        reference (``input_references``) so an editing-capable model (e.g.
+        google/gemini-3-pro-image) can preserve the subject while placing it in
+        a new scene. Raises ``ApiError`` on failure, ``BudgetError`` on cap.
+        """
+        if not self.api_key:
+            raise ApiError("OPENROUTER_API_KEY is not set")
+        if self.db is not None:
+            check_and_consume_budget(self.db, self.PROVIDER, CONFIG.openrouter_daily_call_cap)
+
+        payload: Dict[str, Any] = {"model": model, "prompt": prompt}
+        if aspect_ratio:
+            payload["aspect_ratio"] = aspect_ratio
+        if reference_image_url:
+            payload["input_references"] = [
+                {"type": "image_url", "image_url": {"url": reference_image_url}}
+            ]
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/affiliate-engine",
+            "X-Title": "Affiliate Engine",
+        }
+        try:
+            resp = requests.post(
+                f"{self.base_url}/images",
+                headers=headers,
+                json=payload,
+                timeout=CONFIG.http_timeout_seconds,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.HTTPError as exc:
+            body = (exc.response.text or "")[:500] if exc.response is not None else ""
+            raise ApiError(f"OpenRouter image HTTP error for model '{model}': {exc} :: {body}") from exc
+        except requests.RequestException as exc:
+            raise ApiError(f"OpenRouter image request failed: {exc}") from exc
+        except ValueError as exc:
+            raise ApiError(f"OpenRouter image returned non-JSON envelope: {exc}") from exc
+
+        try:
+            b64 = data["data"][0]["b64_json"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ApiError(f"Unexpected OpenRouter image response shape: {exc} :: {list(data.keys())}") from exc
+        try:
+            return base64.b64decode(b64)
+        except (ValueError, TypeError) as exc:
+            raise ApiError(f"OpenRouter image base64 decode failed: {exc}") from exc
+
 
 # ---------------------------------------------------------------------------
 # Higgsfield (image generation)

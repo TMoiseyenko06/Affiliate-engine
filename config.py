@@ -146,6 +146,14 @@ class Config:
     # Used by creative_agent to reason about a concrete in-use demonstration
     # scene (not a generic product-on-white prompt) before calling Higgsfield.
     creative_model: str = field(default_factory=lambda: _env_str("CREATIVE_MODEL", "anthropic/claude-sonnet-5"))
+    # Image-editing model (via OpenRouter's Image API) used specifically when a
+    # real product photo exists: places it into a generated in-use scene while
+    # preserving the product's exact appearance, unlike Higgsfield's reference
+    # mode which only guides style. Per https://openrouter.ai/docs/features/
+    # multimodal/image-generation. Verified against OpenRouter's own docs.
+    openrouter_image_model: str = field(
+        default_factory=lambda: _env_str("OPENROUTER_IMAGE_MODEL", "google/gemini-3-pro-image")
+    )
 
     # --- Higgsfield (image generation) ---
     # Per https://docs.higgsfield.ai (How to use API): async queue pattern —

@@ -96,18 +96,20 @@ All secrets are read from the environment — **never hardcoded**. See
 
 ### Creative scene reasoning
 
-`creative_agent.py` doesn't hand Higgsfield a generic "lifestyle product photo"
-template — it first makes an OpenRouter call (`CREATIVE_MODEL`) asking the
-model to reason concretely about how the product is actually used, and
+`creative_agent.py` doesn't hand the image model a generic "lifestyle product
+photo" template — it first makes an OpenRouter call (`CREATIVE_MODEL`) asking
+the model to reason concretely about how the product is actually used, and
 describe a specific, full-bleed real-world scene (e.g. "spice jars on a rack,
 a hand sprinkling seasoning onto food while cooking" rather than a product
-floating on a white background). The prompt explicitly forbids plain/empty
-backgrounds and reserved negative space — the compositor's gradient scrim and
-stroke-outlined text (see below) are legible over a busy image on their own,
-so there's no need to ask the image model to leave blank space for text. If
-this call fails (missing key, budget cap, bad response), it falls back to a
-simpler static prompt that still avoids plain backgrounds — this never blocks
-a cycle, but produces a less specific scene.
+floating on a white background). This scene description is used both by the
+image-editing path (below, when a real product photo exists) and by
+Higgsfield's text-to-image (when it doesn't). The prompt explicitly forbids
+plain/empty backgrounds and reserved negative space — the compositor's
+gradient scrim and stroke-outlined text (see below) are legible over a busy
+image on their own, so there's no need to ask the image model to leave blank
+space for text. If this call fails (missing key, budget cap, bad response),
+it falls back to a simpler static prompt that still avoids plain backgrounds
+— this never blocks a cycle, but produces a less specific scene.
 
 Both the scene prompt and the copywriter are also steered toward **native,
 authentic-feeling content rather than ad-like content**: the image prompt
@@ -126,20 +128,34 @@ real product data — the verifier re-checks both independently.
 
 ### Product imagery (affiliate posts)
 
-**When a real product photo is available, it is used DIRECTLY as the pin's
-base image — Higgsfield is not called at all for that pin.** Earlier this
-pipeline tried anchoring *generation* on a reference photo (asking Higgsfield
-to recreate the product in a new scene), but no generative model — Higgsfield
-included — reliably preserves an exact product's shape, color, and label
-design; testing showed it producing a plausible-looking but *completely
-different* fictional product. Showing a product that doesn't match what's
-actually sold at the link is a real misrepresentation risk, not just a style
-issue, so the only approach that guarantees fidelity is using the real photo
-verbatim: `creative_agent.generate_creative()` downloads it and hands it
-straight to the compositor for cropping/resizing and the title overlay — no
-AI involved in the visual at all. If the download fails, it falls back to
-full AI generation (scene-reasoning prompt + Higgsfield) rather than blocking
-the cycle, so a flaky image URL degrades gracefully instead of failing.
+When a real product photo is available, `creative_agent.generate_creative()`
+follows a three-tier priority chain, falling back only as far as it needs to:
+
+1. **Edit it into a generated in-use scene.** The scene-reasoning prompt (see
+   above) is sent to an image-editing model via OpenRouter's Image API
+   (`OPENROUTER_IMAGE_MODEL`, default `google/gemini-3-pro-image`) along with
+   the real photo as a reference (`input_references`), explicitly instructed
+   to preserve the product's exact shape, color, and label design and only
+   change the surrounding scene. This is the best outcome: an authentic,
+   in-use demonstration photo with the real, correct product in it.
+2. **If editing fails** (missing key, budget cap, API error), fall back to
+   using the real photo **directly, unedited** — no scene, but guaranteed
+   exact fidelity. This was the earlier behavior and remains the fallback:
+   showing a product that doesn't match what's actually sold at the link is
+   a real misrepresentation risk, so fidelity always wins over having a
+   generated scene.
+3. **Only if no real photo exists at all** (scraping off, no test URL,
+   download fails too) does it fall back to full text-to-image generation
+   (Higgsfield) — a plausible but not guaranteed-accurate depiction.
+
+Earlier this pipeline tried anchoring *generation* on a reference photo via
+Higgsfield's own reference-image mode, but that mode (like most "image
+reference" tools on generative platforms) guides style/mood, not exact
+reproduction — testing showed it producing a plausible-looking but
+*completely different* fictional product (wrong label design, wrong logo).
+OpenRouter's dedicated image-editing models are built specifically for
+"edit this image, preserve the subject," which is a different and more
+appropriate capability for this use case.
 
 Getting that real photo in the first place is the harder problem:
 

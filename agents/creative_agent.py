@@ -1,9 +1,13 @@
-"""Creative agent — builds an image-gen prompt and calls Higgsfield.
+"""Creative agent — produces the base 1000x1500 (2:3) pin image.
 
-Requests a 1000x1500 (2:3) image. Affiliate mode produces product/lifestyle
-context imagery; organic mode produces mood/aesthetic imagery for the niche.
+Affiliate mode, when a real product photo is available, edits that photo
+into a generated in-use scene (OpenRouter image-editing model) while
+preserving the product's exact appearance, falling back to the unedited
+photo if editing fails, and to full Higgsfield text-to-image generation only
+when no real photo exists at all. Organic mode always uses Higgsfield
+text-to-image for mood/aesthetic imagery.
 
-Returns the path to the saved raw image plus its bytes.
+Returns the path to the saved image plus its bytes.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import requests
 
 from config import CONFIG, PIN_IMAGE_HEIGHT, PIN_IMAGE_WIDTH
 from db import Database
-from .clients import ApiError, HiggsfieldClient, OpenRouterClient
+from .clients import ApiError, BudgetError, HiggsfieldClient, OpenRouterClient
 
 logger = logging.getLogger("affiliate_engine.creative")
 
@@ -202,13 +206,20 @@ def generate_creative(
 ) -> Tuple[str, bytes]:
     """Generate the base image; return (path, bytes). Raises ``ApiError``.
 
-    When a real product photo is available (``subject['image_url']``, affiliate
-    only), it is used DIRECTLY as the base image rather than asking a
-    generative model to recreate the product — no text-to-image or
-    reference-guided generation can reliably preserve an exact product's
-    shape, color, and label design, and showing a product that doesn't match
-    what's actually sold at the link is a real misrepresentation risk, not
-    just a style issue. AI generation is only used when no real photo exists.
+    When a real product photo is available (``subject['image_url']``,
+    affiliate only), priority order is:
+      1. Edit it into a generated in-use scene via an image-editing model
+         (OpenRouter, e.g. google/gemini-3-pro-image) that takes the real
+         photo as a reference and is designed to preserve the subject while
+         placing it in a new context.
+      2. If that fails (missing key, budget cap, API error), fall back to
+         using the real photo DIRECTLY, unedited — this guarantees exact
+         product fidelity, which matters more than having a generated scene:
+         showing a product that doesn't match what's actually sold at the
+         link is a real misrepresentation risk, not just a style issue.
+      3. Only when no real photo exists at all does this fall back to full
+         text-to-image generation (Higgsfield), which cannot guarantee the
+         product's appearance is accurate.
 
     When ``mock`` is True and no real photo is available, a locally drawn
     1000x1500 placeholder is produced instead (for testing the pipeline
@@ -220,12 +231,17 @@ def generate_creative(
 
     reference_image_url = subject.get("image_url") if content_type == "affiliate" else None
     if reference_image_url:
+        edited = _edit_reference_image(content_type, copy, subject, reference_image_url, db)
+        if edited is not None:
+            path = _save_image(content_type, edited, output_dir, reference_image_url + "-edited")
+            return path, edited
+
         image_bytes = _download_reference_image(reference_image_url)
         if image_bytes is not None:
-            logger.info("Using real product photo directly (no AI generation): %s", reference_image_url)
+            logger.info("Using real product photo directly (unedited): %s", reference_image_url)
             path = _save_image(content_type, image_bytes, output_dir, reference_image_url)
             return path, image_bytes
-        logger.warning("Falling back to AI generation since the reference photo could not be fetched")
+        logger.warning("Reference photo unusable (edit failed and download failed); falling back to generation")
 
     prompt = build_image_prompt(content_type, copy, subject, db=db)
     logger.info("Image prompt: %s", prompt)
@@ -239,6 +255,43 @@ def generate_creative(
 
     path = _save_image(content_type, image_bytes, output_dir, prompt)
     return path, image_bytes
+
+
+def _edit_reference_image(
+    content_type: str,
+    copy: Dict[str, Any],
+    subject: Dict[str, Any],
+    reference_image_url: str,
+    db: Optional[Database],
+) -> Optional[bytes]:
+    """Place the real reference photo into a generated in-use scene while
+    preserving its exact appearance. Returns None on any failure — this is
+    an enhancement, never a hard requirement (see generate_creative's
+    fallback chain)."""
+    scene_prompt = _build_scene_prompt_llm(content_type, copy, subject, db)
+    if not scene_prompt:
+        return None
+
+    edit_prompt = (
+        f"{scene_prompt}\n\nThe attached reference image shows the exact real "
+        f"product — preserve its exact shape, color, label design, and text "
+        f"unchanged; do not redesign, restyle, or alter the product itself in "
+        f"any way. Only change the surrounding scene/context around it."
+    )
+    try:
+        client = OpenRouterClient(db=db)
+        return client.generate_image(
+            model=CONFIG.openrouter_image_model,
+            prompt=edit_prompt,
+            aspect_ratio="2:3",
+            reference_image_url=reference_image_url,
+        )
+    except (ApiError, BudgetError, ValueError) as exc:
+        logger.warning(
+            "Image-editing model failed to place reference photo in a scene, "
+            "falling back to the unedited photo: %s", exc,
+        )
+        return None
 
 
 def _mock_image(content_type: str, copy: Dict[str, Any], subject: Dict[str, Any]) -> bytes:
