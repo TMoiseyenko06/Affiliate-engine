@@ -164,9 +164,12 @@ def scout_product(
         ranked = _deterministic_pick(fresh)
 
     # Best-effort real product image for the creative step; None is fine.
+    # Scraping is confirmed blocked by Amazon (see config.py) so this normally
+    # returns None immediately; TEST_PRODUCT_IMAGE_URL is a manual override
+    # for exercising the reference-image flow without a working scraper.
     from amazon_scraper import fetch_product_image_url
 
-    ranked["image_url"] = fetch_product_image_url(ranked.get("source_url", ""))
+    ranked["image_url"] = fetch_product_image_url(ranked.get("source_url", "")) or CONFIG.test_product_image_url
 
     # Persist the chosen product so it counts toward reuse exclusion.
     db.upsert_product(

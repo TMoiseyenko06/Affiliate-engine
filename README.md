@@ -96,21 +96,30 @@ All secrets are read from the environment — **never hardcoded**. See
 
 ### Product imagery (affiliate posts)
 
-For affiliate pins, the creative step tries to anchor image generation on the
-**real Amazon product photo** rather than letting the model hallucinate what
-the product looks like. `amazon_scraper.py` fetches the listing's primary
-image (`og:image` meta tag, with a fallback to Amazon's embedded image JSON)
-and passes it to Higgsfield as a reference image.
+For affiliate pins, the creative step *can* anchor image generation on the
+real Amazon product photo (as a Higgsfield reference image) instead of
+letting the model hallucinate what the product looks like — but **the
+scraper that would supply that photo is confirmed non-functional**:
 
-**This is an interim measure, not a durable solution:**
-- Scraping the listing page is against Amazon's Terms of Service and fragile
-  to markup changes. It's meant for testing now; the intended long-term
-  source is the official **Product Advertising API (PA-API 5.0)**, which
-  requires an approved Associates account (qualifying recent sales) and
-  AWS-style request signing — swap it in by replacing the body of
-  `fetch_product_image_url()` in `amazon_scraper.py`; no caller changes needed.
-- Set `SCRAPE_PRODUCT_IMAGES=false` to disable it entirely (falls back to pure
-  text-to-image generation, as before).
+- `amazon_scraper.py` fetches a listing's primary image via plain HTTP. In
+  testing, Amazon's bot wall (`opfcaptcha.amazon.com`) blocked every single
+  request from two independent networks — it never returned the actual
+  listing page, only a captcha challenge. This is disabled by default
+  (`SCRAPE_PRODUCT_IMAGES=false`); only turn it on if you have your own
+  working scraping strategy (e.g. a headless browser with anti-detection
+  measures, or a paid scraping proxy service).
+- The intended long-term source is the official **Product Advertising API
+  (PA-API 5.0)**, which requires an approved Associates account (qualifying
+  recent sales) and AWS-style request signing. Swap it in by replacing the
+  body of `fetch_product_image_url()` in `amazon_scraper.py` — no caller
+  changes needed, the rest of the pipeline just consumes whatever URL (or
+  `None`) comes back.
+- **For testing without a working image source**, set
+  `TEST_PRODUCT_IMAGE_URL` to any real image URL — it's used as the
+  reference photo whenever no scraped image is available, so you can
+  exercise the compositor + Higgsfield reference-image flow with real
+  imagery today. It applies the same image to every affiliate product, so
+  it's a testing aid only, not for production.
 - The exact Higgsfield request field for a reference image
   (`HIGGSFIELD_IMAGE_PARAM`, default `image`) is **unverified** against their
   own docs — if it's wrong, `HiggsfieldClient` automatically retries the same
@@ -118,9 +127,9 @@ and passes it to Higgsfield as a reference image.
   degrades gracefully instead of blocking posts. If you see repeated
   "retrying as text-only" warnings in the logs, correct the env var once you
   find the right field name in Higgsfield's dashboard/support.
-- If no image can be scraped (page blocked, layout changed, product has no
-  `og:image`), the pipeline silently falls back to text-to-image — this never
-  blocks a cycle.
+- Whenever no reference image is available (scraping off, no test URL set,
+  or scraping fails), the pipeline silently falls back to text-to-image —
+  this never blocks a cycle.
 
 **Loading them:** the app auto-loads a `.env` file from the working directory
 at startup (dependency-free, cross-platform) — just create `.env` and run.

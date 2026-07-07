@@ -175,14 +175,21 @@ class Config:
     higgsfield_image_param: str = field(default_factory=lambda: _env_str("HIGGSFIELD_IMAGE_PARAM", "image"))
 
     # --- Amazon product image sourcing (for affiliate creative reference) ---
-    # Interim measure until the official Product Advertising API is wired up
-    # (that requires an approved Associates account + AWS-style signing).
-    # Scrapes the product listing page for its primary image (og:image meta
-    # tag, falling back to Amazon's embedded high-res image JSON). This is
-    # against Amazon's Terms of Service and fragile to markup changes — treat
-    # it as a stopgap, not the long-term source. Never blocks a cycle: on any
-    # failure it returns no image and creative falls back to pure text-to-image.
-    scrape_product_images: bool = field(default_factory=lambda: _env_bool("SCRAPE_PRODUCT_IMAGES", True))
+    # CONFIRMED NON-VIABLE as of testing: plain HTTP scraping of Amazon listing
+    # pages is blocked outright by Amazon's bot wall (opfcaptcha.amazon.com),
+    # verified from two independent networks — every request returns a captcha
+    # page, never the real listing. Disabled by default; only enable if you
+    # have a working scraping strategy (e.g. a headless browser or a paid
+    # scraping proxy service) — the long-term correct source is the official
+    # Product Advertising API (PA-API 5.0), which requires an approved
+    # Associates account and AWS-style request signing.
+    scrape_product_images: bool = field(default_factory=lambda: _env_bool("SCRAPE_PRODUCT_IMAGES", False))
+    # Manual testing override: when set, this URL is used as the product
+    # reference image whenever no scraped image is available. Lets you
+    # exercise the compositor + Higgsfield reference-image flow with a real
+    # photo without a working scraper. NOT meant for production — it would
+    # apply the same static image to every affiliate product.
+    test_product_image_url: Optional[str] = field(default_factory=lambda: _env_str("TEST_PRODUCT_IMAGE_URL"))
 
     # --- Pinterest API v5 ---
     pinterest_access_token: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_ACCESS_TOKEN"))
