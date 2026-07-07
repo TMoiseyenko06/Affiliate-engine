@@ -1,0 +1,19 @@
+Comfortaa-Bold.ttf, Quicksand-Bold.ttf, and DancingScript-Bold.otf are bundled
+here (alongside DejaVuSans-Bold.ttf, see LICENSE-DEJAVU.txt) to give the pin
+compositor genuine typeface variety without depending on whatever fonts
+happen to be installed on the machine running the pipeline.
+
+All three are licensed under the SIL Open Font License, Version 1.1 (OFL-1.1)
+— free to use, bundle, redistribute, and embed in software. Full license
+text: https://scripts.sil.org/OFL
+
+- Comfortaa: Copyright 2008-2017 Johan Aakerlund. Source:
+  https://fonts.google.com/specimen/Comfortaa
+- Quicksand: Copyright 2011 The Quicksand Project Authors. Source:
+  https://fonts.google.com/specimen/Quicksand
+- Dancing Script: Copyright 2010 Pablo Impallari and Igino Marini. Source:
+  https://fonts.google.com/specimen/Dancing+Script
+
+Per the OFL, these fonts may be bundled and redistributed with this software
+as long as the reserved font names above are not used to market a modified
+version of the fonts themselves.

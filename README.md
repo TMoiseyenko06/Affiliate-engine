@@ -104,12 +104,12 @@ a hand sprinkling seasoning onto food while cooking" rather than a product
 floating on a white background). This scene description is used both by the
 image-editing path (below, when a real product photo exists) and by
 Higgsfield's text-to-image (when it doesn't). The prompt explicitly forbids
-plain/empty backgrounds and reserved negative space — the compositor's
-gradient scrim and stroke-outlined text (see below) are legible over a busy
-image on their own, so there's no need to ask the image model to leave blank
-space for text. If this call fails (missing key, budget cap, bad response),
-it falls back to a simpler static prompt that still avoids plain backgrounds
-— this never blocks a cycle, but produces a less specific scene.
+plain/empty backgrounds and reserved negative space — the compositor's title
+band (see "Pin title overlay" below) is legible over a busy image on its own,
+so there's no need to ask the image model to leave blank space for text. If
+this call fails (missing key, budget cap, bad response), it falls back to a
+simpler static prompt that still avoids plain backgrounds — this never blocks
+a cycle, but produces a less specific scene.
 
 Both the scene prompt and the copywriter are also steered toward **native,
 authentic-feeling content rather than ad-like content**: the image prompt
@@ -125,6 +125,38 @@ every affiliate description verbatim by code regardless of what the LLM
 writes (see `copywriter_agent._write_affiliate`), and the copywriter is still
 hard-required to never invent features, reviews, or stats not present in the
 real product data — the verifier re-checks both independently.
+
+### Pin title overlay
+
+`compositor.py` draws the title in a band anchored to the **bottom** of the
+image (not the top), and deliberately does **not** look the same on every
+pin — each call to `compose()` independently randomizes:
+
+- **Background shape**: a clean rounded card, a soft gradient fade, a
+  smooth sine-wave top edge, an irregular "torn paper" edge, or a row of
+  scalloped bumps (`compositor.SHAPE_STYLES`).
+- **Colour palette**: warm, inviting tones (coral, honey, terracotta,
+  blush, sage, sunshine, peach), each paired with a text colour chosen for
+  contrast against it — not always white-on-dark (`compositor.PALETTES`).
+- **Typeface**: DejaVu Sans Bold, Comfortaa Bold, Quicksand Bold, or Dancing
+  Script (a cursive/script face, bundled under `assets/fonts/`, all
+  SIL Open Font License) — the script face is only used for shorter titles
+  (`max_title_len`) since a cursive face hurts legibility on long,
+  keyword-heavy text, and gets a soft drop shadow instead of a hard outline
+  (a uniform stroke reads badly on script letterforms; the bolder sans
+  faces still get the outline).
+
+This gives real per-pin combinatorial variety (7 palettes × 4 fonts × 5
+shapes) rather than a fixed look — that's intentional, not a bug, if two
+pins in a row look different from each other. Text auto-sizes as large as
+possible while wrapping to at most 3 lines (`compositor.MAX_TITLE_LINES`),
+and the band never exceeds `MAX_BAND_FRACTION` (42%) of the image height so
+even a long title can't swallow the whole pin. Wavy/bumpy/torn shapes are
+capped by `EDGE_MARGIN` so decorative edges never collide with the text
+itself. All fonts are bundled directly in the repo rather than relying on
+whatever happens to be installed on the machine running the pipeline — an
+earlier version depended on OS font paths and silently fell back to PIL's
+~10px placeholder font on Windows, rendering text far smaller than intended.
 
 ### Product imagery (affiliate posts)
 
