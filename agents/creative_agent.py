@@ -123,17 +123,41 @@ def _static_fallback_prompt(content_type: str, copy: Dict[str, Any], subject: Di
 def _build_scene_prompt_llm(
     content_type: str, copy: Dict[str, Any], subject: Dict[str, Any], db: Optional[Database]
 ) -> Optional[str]:
-    """Ask an LLM to reason about a concrete in-use scene. None on any failure."""
+    """Ask an LLM to reason about a concrete in-use scene. None on any failure.
+
+    This call never sees the actual product photo — it only has text data
+    (title, category, features). When a real reference photo IS available
+    (see _edit_reference_image), the scene description must stay silent on
+    the product's own visual specifics (shape, exact label style, etc.): if
+    it confidently asserts a plausible-but-wrong detail (e.g. "square black
+    labels" as a stereotype for "spice labels"), that text can win out over
+    the actual reference image during editing, producing a product that
+    doesn't match what's really being sold.
+    """
     client = OpenRouterClient(db=db)
     if content_type == "affiliate":
         system_prompt = AFFILIATE_SCENE_SYSTEM_PROMPT
+        has_reference_photo = bool(subject.get("image_url"))
         user_prompt = (
             f"Product: {subject.get('title', copy.get('title', ''))}\n"
             f"Category/niche: {subject.get('category', CONFIG.primary_niche())}\n"
             f"Real product features: {subject.get('features', [])}\n"
             f"Pinterest copy keywords: {copy.get('keywords', [])}\n\n"
-            "Describe the specific real-world in-use scene now."
         )
+        if has_reference_photo:
+            user_prompt += (
+                "IMPORTANT: A real photo of the exact product will be attached "
+                "separately when this scene is generated — you have NOT seen it. "
+                "Do NOT invent, guess, or assert any specific visual detail of "
+                "the product itself (its shape, size, color, label design, "
+                "material, or exact appearance) — you will very likely guess "
+                "wrong and contradict the real photo. Describe ONLY the "
+                "surrounding context, setting, and action (e.g. where it is, "
+                "what's happening, what else is nearby), and refer to the "
+                "product generically (e.g. 'the labeled jar', 'the container') "
+                "without describing what it looks like.\n\n"
+            )
+        user_prompt += "Describe the specific real-world in-use scene now."
     else:
         system_prompt = ORGANIC_SCENE_SYSTEM_PROMPT
         user_prompt = (
@@ -273,10 +297,25 @@ def _edit_reference_image(
         return None
 
     edit_prompt = (
-        f"{scene_prompt}\n\nThe attached reference image shows the exact real "
-        f"product — preserve its exact shape, color, label design, and text "
-        f"unchanged; do not redesign, restyle, or alter the product itself in "
-        f"any way. Only change the surrounding scene/context around it."
+        f"{scene_prompt}\n\n"
+        "CRITICAL — READ THE REFERENCE IMAGE CAREFULLY BEFORE GENERATING: the "
+        "attached reference image shows the exact real product being "
+        "advertised. Before generating anything, look closely at its actual "
+        "physical form in the reference image — its precise SHAPE (e.g. round "
+        "vs. square vs. oval vs. rectangular — copy the exact shape shown, do "
+        "not substitute a different, more common, or more 'typical' shape for "
+        "this type of product), size, proportions, color(s), material, label/"
+        "packaging design, and any visible text or logo. The product in the "
+        "generated image must be visually IDENTICAL to the reference image in "
+        "every one of these respects — not a redesigned, stylized, or "
+        "'improved' reinterpretation of it, and not a generic/stereotypical "
+        "version of this product category. If the reference shows round "
+        "labels, the output must show round labels; if it shows square "
+        "labels, the output must show square labels — copy exactly what is "
+        "shown, do not default to what a typical product like this usually "
+        "looks like. Only the surrounding scene, background, and context may "
+        "be new; the product itself must be an exact, unaltered match to the "
+        "reference image."
     )
     try:
         client = OpenRouterClient(db=db)
