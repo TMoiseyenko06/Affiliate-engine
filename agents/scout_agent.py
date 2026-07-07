@@ -18,7 +18,7 @@ import requests
 
 from config import CONFIG
 from db import Database
-from .clients import ApiError, OpenRouterClient
+from .clients import ApiError, OpenRouterClient, resolve_asin
 
 logger = logging.getLogger("affiliate_engine.scout")
 
@@ -148,6 +148,9 @@ def scout_product(
     db = db or get_db()
     niche = niche or CONFIG.primary_niche()
 
+    if CONFIG.test_force_product_url:
+        return _forced_test_product(niche, db)
+
     candidates = _fetch_candidates(niche)
     excluded = set(db.products_used_within(CONFIG.reuse_lookback_days))
     fresh = [c for c in candidates if c.get("product_id") not in excluded]
@@ -179,6 +182,57 @@ def scout_product(
         source=ranked.get("source_url"),
     )
     return ranked
+
+
+def _forced_test_product(niche: str, db: Database) -> Dict[str, Any]:
+    """Return TEST_FORCE_PRODUCT_URL as the product, bypassing ranking/reuse.
+
+    Testing-only escape hatch: lets you repeatedly exercise the pipeline
+    against one specific real listing instead of whatever the ranking step
+    would otherwise pick. If the URL's ASIN matches a seed candidate, that
+    candidate's real feature data is used instead of a bare stub.
+    """
+    url = CONFIG.test_force_product_url
+    asin = resolve_asin(url)
+    logger.warning(
+        "TEST_FORCE_PRODUCT_URL is set — using forced product %s instead of "
+        "normal scouting. Unset it for real operation.",
+        asin or url,
+    )
+
+    seed_match = next(
+        (c for c in _seed_candidates(niche) if c.get("product_id") == asin), None
+    )
+    if seed_match:
+        product = dict(seed_match)
+    else:
+        product_id = asin or f"TEST-{abs(hash(url)) % 100000}"
+        title = CONFIG.test_force_product_title or f"Test product ({product_id})"
+        product = {
+            "product_id": product_id,
+            "title": title,
+            "category": niche,
+            "commission_rate": None,
+            "trend_signal": "forced-test",
+            "source_url": url,
+        }
+
+    # Use the canonical amazon.com/dp/ASIN form, not a short link — appending
+    # ?tag= to a short link often silently fails to carry the Associates tag
+    # through the redirect (shorteners frequently drop unrecognized params).
+    if asin:
+        product["source_url"] = f"https://www.amazon.com/dp/{asin}"
+
+    from amazon_scraper import fetch_product_image_url
+
+    product["image_url"] = fetch_product_image_url(url) or CONFIG.test_product_image_url
+    db.upsert_product(
+        product_id=product["product_id"],
+        title=product["title"],
+        commission_rate=product["commission_rate"],
+        source=product["source_url"],
+    )
+    return product
 
 
 def _deterministic_pick(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:

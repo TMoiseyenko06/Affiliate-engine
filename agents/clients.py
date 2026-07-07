@@ -27,6 +27,32 @@ from config import CONFIG
 logger = logging.getLogger("affiliate_engine.clients")
 
 
+_ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+
+
+def resolve_asin(url: str) -> Optional[str]:
+    """Pull the ASIN out of an Amazon product URL.
+
+    Handles both direct listing URLs (/dp/ASIN, /gp/product/ASIN) and short
+    links (a.co, amzn.to) by following the redirect chain — shorteners
+    generally only resolve on GET, not HEAD. Never raises; returns None on
+    any failure (unreachable URL, no ASIN found, non-Amazon URL).
+    """
+    if not url:
+        return None
+    match = _ASIN_RE.search(url)
+    if match:
+        return match.group(1)
+    try:
+        with requests.get(url, allow_redirects=True, timeout=10, stream=True) as resp:
+            match = _ASIN_RE.search(resp.url)
+            if match:
+                return match.group(1)
+    except requests.RequestException:
+        pass
+    return None
+
+
 class ApiError(Exception):
     """Raised when an external API call fails."""
 

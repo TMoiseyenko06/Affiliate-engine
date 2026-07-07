@@ -120,6 +120,17 @@ scraper that would supply that photo is confirmed non-functional**:
   exercise the compositor + Higgsfield reference-image flow with real
   imagery today. It applies the same image to every affiliate product, so
   it's a testing aid only, not for production.
+- **To test one specific product repeatedly** instead of whatever the
+  ranking step picks, set `TEST_FORCE_PRODUCT_URL` to any Amazon product URL
+  — direct listing links and short links (`a.co`, `amzn.to`) both work; short
+  links are automatically resolved to the canonical `amazon.com/dp/ASIN`
+  form before the Associates tag is appended (appending `?tag=` directly to
+  a short link often silently fails to carry the tag through the redirect).
+  If the URL's ASIN matches a product already in the built-in seed list, its
+  real feature data is used automatically; otherwise set
+  `TEST_FORCE_PRODUCT_TITLE` too so the copywriter has something to work
+  with. This bypasses ranking and the reuse-window check — not for
+  production.
 - The exact Higgsfield request field for a reference image
   (`HIGGSFIELD_IMAGE_PARAM`, default `image`) is **unverified** against their
   own docs — if it's wrong, `HiggsfieldClient` automatically retries the same

@@ -190,6 +190,15 @@ class Config:
     # photo without a working scraper. NOT meant for production — it would
     # apply the same static image to every affiliate product.
     test_product_image_url: Optional[str] = field(default_factory=lambda: _env_str("TEST_PRODUCT_IMAGE_URL"))
+    # Manual testing override: when set to a real Amazon product URL, the
+    # scout skips ranking/reuse-window logic entirely and always returns this
+    # exact product, so you can repeatedly test one specific listing instead
+    # of whichever candidate the ranking step happens to pick. NOT for
+    # production — every affiliate cycle would promote the same product.
+    test_force_product_url: Optional[str] = field(default_factory=lambda: _env_str("TEST_FORCE_PRODUCT_URL"))
+    test_force_product_title: Optional[str] = field(
+        default_factory=lambda: _env_str("TEST_FORCE_PRODUCT_TITLE")
+    )
 
     # --- Pinterest API v5 ---
     pinterest_access_token: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_ACCESS_TOKEN"))
