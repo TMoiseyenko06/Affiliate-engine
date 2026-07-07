@@ -178,51 +178,59 @@ class OpenRouterClient:
 # Higgsfield (image generation)
 # ---------------------------------------------------------------------------
 class HiggsfieldClient:
+    """Client for the Higgsfield queue API.
+
+    Contract (per https://docs.higgsfield.ai "How to use API"):
+        POST   {base}/{model_id}                    -> submit, returns request_id
+        GET    {base}/requests/{request_id}/status   -> poll for completion
+        Auth:  Authorization: Key {api_key}:{api_key_secret}
+    """
+
     PROVIDER = "higgsfield"
 
     def __init__(self, db=None):
         self.db = db
         self.api_key = CONFIG.higgsfield_api_key
+        self.api_secret = CONFIG.higgsfield_api_secret
         self.base_url = CONFIG.higgsfield_base_url.rstrip("/")
+        self.model_id = CONFIG.higgsfield_model_id.strip("/")
 
     def _headers(self) -> Dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}:{self.api_secret}",
             "Content-Type": "application/json",
         }
 
     def generate_image(self, prompt: str, width: int, height: int) -> bytes:
         """Generate an image and return raw bytes.
 
-        The Higgsfield public API is asynchronous: submit a job to
-        ``POST /v1/generations``, then poll ``GET /v1/generations/{id}`` until it
-        completes, then download the resulting image URL. Raises ``ApiError`` on
-        failure and ``BudgetError`` when the daily cap is hit.
-
-        The exact response shape can vary; extraction below is deliberately
-        tolerant of common field names.
+        Submits to the queue, polls until ``completed``, then downloads the
+        resulting image URL. Raises ``ApiError`` on failure (including
+        ``failed``/``nsfw`` terminal statuses) and ``BudgetError`` when the
+        daily cap is hit.
         """
-        if not self.api_key:
-            raise ApiError("HIGGSFIELD_API_KEY is not set")
+        if not self.api_key or not self.api_secret:
+            raise ApiError(
+                "HIGGSFIELD_API_KEY and HIGGSFIELD_API_SECRET must both be set "
+                "(auth is a key:secret pair, not a single bearer token)"
+            )
         if self.db is not None:
             check_and_consume_budget(self.db, self.PROVIDER, CONFIG.higgsfield_daily_call_cap)
 
-        job_id = self._submit_job(prompt, width, height)
-        image_url = self._poll_job(job_id)
+        aspect_ratio = _aspect_ratio_string(width, height)
+        request_id = self._submit_job(prompt, aspect_ratio)
+        image_url = self._poll_job(request_id)
         return self._download(image_url)
 
-    def _submit_job(self, prompt: str, width: int, height: int) -> str:
+    def _submit_job(self, prompt: str, aspect_ratio: str) -> str:
         payload = {
-            "task": "text-to-image",
-            "model": CONFIG.higgsfield_model,
             "prompt": prompt,
-            "width": width,
-            "height": height,
-            "steps": CONFIG.higgsfield_steps,
+            "aspect_ratio": aspect_ratio,
+            "resolution": CONFIG.higgsfield_resolution,
         }
         try:
             resp = requests.post(
-                f"{self.base_url}/v1/generations",
+                f"{self.base_url}/{self.model_id}",
                 headers=self._headers(),
                 json=payload,
                 timeout=CONFIG.http_timeout_seconds,
@@ -238,18 +246,18 @@ class HiggsfieldClient:
             data = resp.json()
         except ValueError as exc:
             raise ApiError(f"Higgsfield submit returned non-JSON: {exc}") from exc
-        job_id = data.get("id") or data.get("generation_id") or data.get("job_id")
-        if not job_id:
-            raise ApiError(f"Higgsfield submit response had no job id: {list(data.keys())}")
-        return str(job_id)
+        request_id = data.get("request_id")
+        if not request_id:
+            raise ApiError(f"Higgsfield submit response had no request_id: {list(data.keys())}")
+        return str(request_id)
 
-    def _poll_job(self, job_id: str) -> str:
-        """Poll until the job completes; return the output image URL."""
+    def _poll_job(self, request_id: str) -> str:
+        """Poll until the request completes; return the output image URL."""
         deadline = time.monotonic() + CONFIG.higgsfield_poll_timeout_seconds
         while True:
             try:
                 resp = requests.get(
-                    f"{self.base_url}/v1/generations/{job_id}",
+                    f"{self.base_url}/requests/{request_id}/status",
                     headers=self._headers(),
                     timeout=CONFIG.http_timeout_seconds,
                 )
@@ -262,42 +270,35 @@ class HiggsfieldClient:
                 raise ApiError(f"Higgsfield poll failed: {exc}") from exc
 
             status = str(data.get("status", "")).lower()
-            if status in ("completed", "succeeded", "success", "done"):
+            if status == "completed":
                 url = self._extract_image_url(data)
                 if not url:
-                    raise ApiError(f"Higgsfield job completed but no image URL: {list(data.keys())}")
+                    raise ApiError(f"Higgsfield request completed but no image URL: {list(data.keys())}")
                 return url
-            if status in ("failed", "error", "canceled", "cancelled"):
-                raise ApiError(f"Higgsfield job {job_id} failed: {data.get('error') or data}")
+            if status == "nsfw":
+                raise ApiError(
+                    f"Higgsfield request {request_id} was blocked by content moderation (nsfw)"
+                )
+            if status == "failed":
+                raise ApiError(f"Higgsfield request {request_id} failed: {data.get('error') or data}")
+            # "queued" / "in_progress" -> keep polling.
 
             if time.monotonic() >= deadline:
                 raise ApiError(
-                    f"Higgsfield job {job_id} did not finish within "
+                    f"Higgsfield request {request_id} did not finish within "
                     f"{CONFIG.higgsfield_poll_timeout_seconds}s (last status: {status or 'unknown'})"
                 )
             time.sleep(CONFIG.higgsfield_poll_interval_seconds)
 
     @staticmethod
     def _extract_image_url(data: Dict[str, Any]) -> Optional[str]:
-        # Tolerate a few plausible result shapes.
-        for key in ("image_url", "url", "output_url"):
-            if data.get(key):
-                return data[key]
-        output = data.get("output") or data.get("result") or data.get("results")
-        if isinstance(output, str):
-            return output
-        if isinstance(output, dict):
-            for key in ("image_url", "url", "image"):
-                if output.get(key):
-                    return output[key]
-        if isinstance(output, list) and output:
-            first = output[0]
+        images = data.get("images")
+        if isinstance(images, list) and images:
+            first = images[0]
+            if isinstance(first, dict) and first.get("url"):
+                return first["url"]
             if isinstance(first, str):
                 return first
-            if isinstance(first, dict):
-                for key in ("image_url", "url", "image"):
-                    if first.get(key):
-                        return first[key]
         return None
 
     def _download(self, url: str) -> bytes:
@@ -307,6 +308,14 @@ class HiggsfieldClient:
             return resp.content
         except requests.RequestException as exc:
             raise ApiError(f"Failed to download generated image: {exc}") from exc
+
+
+def _aspect_ratio_string(width: int, height: int) -> str:
+    """Reduce a pixel width/height to a ``W:H`` ratio string, e.g. 1000x1500 -> '2:3'."""
+    import math
+
+    divisor = math.gcd(width, height) or 1
+    return f"{width // divisor}:{height // divisor}"
 
 
 # ---------------------------------------------------------------------------

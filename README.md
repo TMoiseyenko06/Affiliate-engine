@@ -81,7 +81,7 @@ All secrets are read from the environment — **never hardcoded**. See
 | Variable | Required for live? | Purpose |
 |---|---|---|
 | `OPENROUTER_API_KEY` | yes | scout, copywriter, verifier LLM calls |
-| `HIGGSFIELD_API_KEY` | yes | image generation |
+| `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` | yes | image generation (both required — auth is a key:secret pair) |
 | `PINTEREST_ACCESS_TOKEN` | yes | posting + analytics (Pinterest API v5) |
 | `PINTEREST_BOARD_ID` | yes | board to post to |
 | `AMAZON_ASSOCIATES_TAG` | yes | Associates tag appended to every affiliate link |

@@ -138,15 +138,21 @@ class Config:
     verifier_model: str = field(default_factory=lambda: _env_str("VERIFIER_MODEL", "openai/gpt-4o-mini"))
 
     # --- Higgsfield (image generation) ---
-    # NOTE: the public API is asynchronous — submit a job, then poll for it.
-    # These defaults follow Higgsfield's documented REST contract; override via
-    # env if your account/docs differ.
+    # Per https://docs.higgsfield.ai (How to use API): async queue pattern —
+    # POST {base}/{model_id} to submit, GET {base}/requests/{id}/status to poll.
+    # Auth is a KEY + SECRET pair joined with a colon, NOT a bare bearer token:
+    #   Authorization: Key {api_key}:{api_key_secret}
     higgsfield_api_key: Optional[str] = field(default_factory=lambda: _env_str("HIGGSFIELD_API_KEY"))
+    higgsfield_api_secret: Optional[str] = field(default_factory=lambda: _env_str("HIGGSFIELD_API_SECRET"))
     higgsfield_base_url: str = field(
-        default_factory=lambda: _env_str("HIGGSFIELD_BASE_URL", "https://api.higgsfield.ai")
+        default_factory=lambda: _env_str("HIGGSFIELD_BASE_URL", "https://platform.higgsfield.ai")
     )
-    higgsfield_model: str = field(default_factory=lambda: _env_str("HIGGSFIELD_MODEL", "flux"))
-    higgsfield_steps: int = field(default_factory=lambda: _env_int("HIGGSFIELD_STEPS", 40))
+    higgsfield_model_id: str = field(
+        default_factory=lambda: _env_str("HIGGSFIELD_MODEL_ID", "higgsfield-ai/soul/standard")
+    )
+    # Model-quality tier; check the model's page in the Higgsfield dashboard for
+    # the exact accepted values if this is rejected (varies per model_id).
+    higgsfield_resolution: str = field(default_factory=lambda: _env_str("HIGGSFIELD_RESOLUTION", "1080p"))
     # Async job polling.
     higgsfield_poll_interval_seconds: float = field(
         default_factory=lambda: _env_float("HIGGSFIELD_POLL_INTERVAL_SECONDS", 3.0)
@@ -195,6 +201,8 @@ class Config:
             missing.append("OPENROUTER_API_KEY")
         if not self.higgsfield_api_key:
             missing.append("HIGGSFIELD_API_KEY")
+        if not self.higgsfield_api_secret:
+            missing.append("HIGGSFIELD_API_SECRET")
         if not self.pinterest_access_token:
             missing.append("PINTEREST_ACCESS_TOKEN")
         if not self.pinterest_board_id:
