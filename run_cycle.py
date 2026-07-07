@@ -47,11 +47,20 @@ def cmd_run(args) -> int:
             )
             return 2
 
+    if args.mock_images and not args.dry_run:
+        print(
+            "ERROR: --mock-images can only be used with --dry-run "
+            "(a placeholder image must never be posted).",
+            file=sys.stderr,
+        )
+        return 2
+
     summary = run_cycle(
         db=db,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
         skip_llm_verify=args.skip_llm_verify,
+        mock_images=args.mock_images,
     )
 
     # Dead-man's-switch check after each real cycle.
@@ -105,6 +114,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-llm-verify",
         action="store_true",
         help="Skip the LLM judgement layer of the verifier (deterministic checks only).",
+    )
+    parser.add_argument(
+        "--mock-images",
+        action="store_true",
+        help="Stub image generation with a local placeholder (no Higgsfield key "
+             "needed). Only valid with --dry-run.",
     )
     parser.add_argument(
         "--output-dir",

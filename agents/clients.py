@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -184,62 +185,120 @@ class HiggsfieldClient:
         self.api_key = CONFIG.higgsfield_api_key
         self.base_url = CONFIG.higgsfield_base_url.rstrip("/")
 
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
     def generate_image(self, prompt: str, width: int, height: int) -> bytes:
         """Generate an image and return raw bytes.
 
-        Handles both direct-bytes and URL-returning API shapes. Raises
-        ``ApiError`` on failure and ``BudgetError`` when the cap is hit.
+        The Higgsfield public API is asynchronous: submit a job to
+        ``POST /v1/generations``, then poll ``GET /v1/generations/{id}`` until it
+        completes, then download the resulting image URL. Raises ``ApiError`` on
+        failure and ``BudgetError`` when the daily cap is hit.
+
+        The exact response shape can vary; extraction below is deliberately
+        tolerant of common field names.
         """
         if not self.api_key:
             raise ApiError("HIGGSFIELD_API_KEY is not set")
         if self.db is not None:
             check_and_consume_budget(self.db, self.PROVIDER, CONFIG.higgsfield_daily_call_cap)
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        job_id = self._submit_job(prompt, width, height)
+        image_url = self._poll_job(job_id)
+        return self._download(image_url)
+
+    def _submit_job(self, prompt: str, width: int, height: int) -> str:
         payload = {
+            "task": "text-to-image",
+            "model": CONFIG.higgsfield_model,
             "prompt": prompt,
             "width": width,
             "height": height,
-            "aspect_ratio": "2:3",
+            "steps": CONFIG.higgsfield_steps,
         }
         try:
             resp = requests.post(
-                f"{self.base_url}/images/generate",
-                headers=headers,
+                f"{self.base_url}/v1/generations",
+                headers=self._headers(),
                 json=payload,
                 timeout=CONFIG.http_timeout_seconds,
             )
             resp.raise_for_status()
+        except requests.HTTPError as exc:
+            body = (exc.response.text or "")[:500] if exc.response is not None else ""
+            raise ApiError(f"Higgsfield submit HTTP error: {exc} :: {body}") from exc
         except requests.RequestException as exc:
-            raise ApiError(f"Higgsfield request failed: {exc}") from exc
+            raise ApiError(f"Higgsfield submit failed: {exc}") from exc
 
-        content_type = resp.headers.get("Content-Type", "")
-        if content_type.startswith("image/"):
-            return resp.content
-
-        # Otherwise expect JSON with a URL or base64 payload.
         try:
             data = resp.json()
         except ValueError as exc:
-            raise ApiError(f"Higgsfield returned unparseable response: {exc}") from exc
+            raise ApiError(f"Higgsfield submit returned non-JSON: {exc}") from exc
+        job_id = data.get("id") or data.get("generation_id") or data.get("job_id")
+        if not job_id:
+            raise ApiError(f"Higgsfield submit response had no job id: {list(data.keys())}")
+        return str(job_id)
 
-        image_url = (
-            data.get("image_url")
-            or data.get("url")
-            or (data.get("data", [{}])[0].get("url") if isinstance(data.get("data"), list) else None)
-        )
-        b64 = data.get("image_base64") or data.get("b64_json")
-        if image_url:
-            return self._download(image_url)
-        if b64:
+    def _poll_job(self, job_id: str) -> str:
+        """Poll until the job completes; return the output image URL."""
+        deadline = time.monotonic() + CONFIG.higgsfield_poll_timeout_seconds
+        while True:
             try:
-                return base64.b64decode(b64)
-            except (ValueError, TypeError) as exc:
-                raise ApiError(f"Higgsfield base64 decode failed: {exc}") from exc
-        raise ApiError(f"Higgsfield response contained no image data: {list(data.keys())}")
+                resp = requests.get(
+                    f"{self.base_url}/v1/generations/{job_id}",
+                    headers=self._headers(),
+                    timeout=CONFIG.http_timeout_seconds,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.HTTPError as exc:
+                body = (exc.response.text or "")[:500] if exc.response is not None else ""
+                raise ApiError(f"Higgsfield poll HTTP error: {exc} :: {body}") from exc
+            except (requests.RequestException, ValueError) as exc:
+                raise ApiError(f"Higgsfield poll failed: {exc}") from exc
+
+            status = str(data.get("status", "")).lower()
+            if status in ("completed", "succeeded", "success", "done"):
+                url = self._extract_image_url(data)
+                if not url:
+                    raise ApiError(f"Higgsfield job completed but no image URL: {list(data.keys())}")
+                return url
+            if status in ("failed", "error", "canceled", "cancelled"):
+                raise ApiError(f"Higgsfield job {job_id} failed: {data.get('error') or data}")
+
+            if time.monotonic() >= deadline:
+                raise ApiError(
+                    f"Higgsfield job {job_id} did not finish within "
+                    f"{CONFIG.higgsfield_poll_timeout_seconds}s (last status: {status or 'unknown'})"
+                )
+            time.sleep(CONFIG.higgsfield_poll_interval_seconds)
+
+    @staticmethod
+    def _extract_image_url(data: Dict[str, Any]) -> Optional[str]:
+        # Tolerate a few plausible result shapes.
+        for key in ("image_url", "url", "output_url"):
+            if data.get(key):
+                return data[key]
+        output = data.get("output") or data.get("result") or data.get("results")
+        if isinstance(output, str):
+            return output
+        if isinstance(output, dict):
+            for key in ("image_url", "url", "image"):
+                if output.get(key):
+                    return output[key]
+        if isinstance(output, list) and output:
+            first = output[0]
+            if isinstance(first, str):
+                return first
+            if isinstance(first, dict):
+                for key in ("image_url", "url", "image"):
+                    if first.get(key):
+                        return first[key]
+        return None
 
     def _download(self, url: str) -> bytes:
         try:

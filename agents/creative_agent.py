@@ -49,16 +49,26 @@ def generate_creative(
     subject: Dict[str, Any],
     db: Optional[Database] = None,
     output_dir: Optional[str] = None,
+    mock: bool = False,
 ) -> Tuple[str, bytes]:
-    """Generate the base image; return (path, bytes). Raises ``ApiError``."""
+    """Generate the base image; return (path, bytes). Raises ``ApiError``.
+
+    When ``mock`` is True, no image API is called: a locally drawn 1000x1500
+    placeholder is produced instead (for testing the pipeline without a
+    Higgsfield key). A mock image is intended only for ``--dry-run``.
+    """
     from db import get_db
 
     db = db or get_db()
     prompt = build_image_prompt(content_type, copy, subject)
     logger.info("Image prompt: %s", prompt)
 
-    client = HiggsfieldClient(db=db)
-    image_bytes = client.generate_image(prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)
+    if mock:
+        image_bytes = _mock_image(content_type, copy, subject)
+        logger.warning("MOCK image generated (no Higgsfield call) — dry-run only")
+    else:
+        client = HiggsfieldClient(db=db)
+        image_bytes = client.generate_image(prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)
 
     out_dir = output_dir or tempfile.gettempdir()
     os.makedirs(out_dir, exist_ok=True)
@@ -69,3 +79,28 @@ def generate_creative(
     except OSError as exc:
         raise ApiError(f"Failed to save generated image: {exc}") from exc
     return path, image_bytes
+
+
+def _mock_image(content_type: str, copy: Dict[str, Any], subject: Dict[str, Any]) -> bytes:
+    """Draw a 1000x1500 placeholder so the compositor/verifier have a real image."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    # Distinct background per mode so it's obvious at a glance.
+    bg = (206, 214, 224) if content_type == "affiliate" else (214, 224, 210)
+    img = Image.new("RGB", (PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    label = subject.get("title") or subject.get("topic") or content_type
+    lines = [
+        "MOCK IMAGE (no Higgsfield)",
+        f"mode: {content_type}",
+        str(label)[:40],
+    ]
+    y = PIN_IMAGE_HEIGHT // 2 - 40
+    for ln in lines:
+        draw.text((60, y), ln, fill=(60, 60, 60))
+        y += 28
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()

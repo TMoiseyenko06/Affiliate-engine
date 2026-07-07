@@ -138,9 +138,21 @@ class Config:
     verifier_model: str = field(default_factory=lambda: _env_str("VERIFIER_MODEL", "openai/gpt-4o-mini"))
 
     # --- Higgsfield (image generation) ---
+    # NOTE: the public API is asynchronous — submit a job, then poll for it.
+    # These defaults follow Higgsfield's documented REST contract; override via
+    # env if your account/docs differ.
     higgsfield_api_key: Optional[str] = field(default_factory=lambda: _env_str("HIGGSFIELD_API_KEY"))
     higgsfield_base_url: str = field(
-        default_factory=lambda: _env_str("HIGGSFIELD_BASE_URL", "https://platform.higgsfield.ai/v1")
+        default_factory=lambda: _env_str("HIGGSFIELD_BASE_URL", "https://api.higgsfield.ai")
+    )
+    higgsfield_model: str = field(default_factory=lambda: _env_str("HIGGSFIELD_MODEL", "flux"))
+    higgsfield_steps: int = field(default_factory=lambda: _env_int("HIGGSFIELD_STEPS", 40))
+    # Async job polling.
+    higgsfield_poll_interval_seconds: float = field(
+        default_factory=lambda: _env_float("HIGGSFIELD_POLL_INTERVAL_SECONDS", 3.0)
+    )
+    higgsfield_poll_timeout_seconds: int = field(
+        default_factory=lambda: _env_int("HIGGSFIELD_POLL_TIMEOUT_SECONDS", 180)
     )
 
     # --- Pinterest API v5 ---

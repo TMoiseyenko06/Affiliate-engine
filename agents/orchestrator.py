@@ -79,6 +79,7 @@ def _generate_and_verify(
     output_dir: Optional[str],
     extra_context: str = "",
     skip_llm_verify: bool = False,
+    mock_images: bool = False,
 ) -> Dict[str, Any]:
     """Run copywriter -> creative -> compositor -> verifier once.
 
@@ -92,7 +93,7 @@ def _generate_and_verify(
 
     # 2. Creative
     base_path, _ = creative_agent.generate_creative(
-        content_type, copy, subject, db=db, output_dir=output_dir
+        content_type, copy, subject, db=db, output_dir=output_dir, mock=mock_images
     )
     db.log_step(attempt_id, "creative", "ok", {"path": base_path})
 
@@ -119,11 +120,19 @@ def run_cycle(
     dry_run: bool = False,
     output_dir: Optional[str] = None,
     skip_llm_verify: bool = False,
+    mock_images: bool = False,
 ) -> Dict[str, Any]:
     """Execute one full cycle. Returns a summary dict (never raises for
     expected pipeline failures — those are logged and reported in the summary).
+
+    ``mock_images`` stubs image generation with a local placeholder and is only
+    permitted alongside ``dry_run`` (a mock image must never be posted).
     """
     from db import get_db
+
+    # Safety: a mock/placeholder image must never reach the poster.
+    if mock_images and not dry_run:
+        raise ValueError("mock_images=True requires dry_run=True (never post a placeholder)")
 
     db = db or get_db()
     attempt_id = uuid.uuid4().hex[:12]
@@ -150,7 +159,7 @@ def run_cycle(
         # --- generate + verify (attempt 1) ---
         result = _generate_and_verify(
             content_type, subject, angle, db, attempt_id, output_dir,
-            skip_llm_verify=skip_llm_verify,
+            skip_llm_verify=skip_llm_verify, mock_images=mock_images,
         )
 
         # --- retry once on failure ---
@@ -161,7 +170,7 @@ def run_cycle(
             result = _generate_and_verify(
                 content_type, subject, angle, db, attempt_id, output_dir,
                 extra_context=f"Previous attempt failed verification for: {reasons}",
-                skip_llm_verify=skip_llm_verify,
+                skip_llm_verify=skip_llm_verify, mock_images=mock_images,
             )
 
         if not result["verdict"]["pass"]:
