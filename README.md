@@ -86,13 +86,28 @@ All secrets are read from the environment — **never hardcoded**. See
 | `PINTEREST_BOARD_ID` | yes | board to post to |
 | `AMAZON_ASSOCIATES_TAG` | yes | Associates tag appended to every affiliate link |
 | `AFFILIATE_DISCLOSURE_TEXT` | no | verbatim disclosure (has a default) |
-| `SCOUT_MODEL` / `COPYWRITER_MODEL` / `VERIFIER_MODEL` | no | model routing; **keep the verifier model different** from the copywriter so review is independent |
+| `SCOUT_MODEL` / `COPYWRITER_MODEL` / `CREATIVE_MODEL` / `VERIFIER_MODEL` | no | model routing; **keep the verifier model different** from the copywriter so review is independent |
 | `NICHES`, `TARGET_AFFILIATE_RATIO`, `DAILY_POST_COUNT` | no | content strategy |
 | `REUSE_LOOKBACK_DAYS` | no | don’t reuse a product/topic within N days |
 | `OPENROUTER_DAILY_CALL_CAP`, `HIGGSFIELD_DAILY_CALL_CAP` | no | per-day budget caps |
 | `DATABASE_URL` | no | defaults to `sqlite:///affiliate_engine.db` |
 | `ALERT_FILE_PATH`, `DEADMAN_HOURS`, `ALERT_WEBHOOK_URL` | no | alerting |
-| `SCRAPE_PRODUCT_IMAGES` | no | fetch a real product photo to anchor affiliate creative (see below); default `true` |
+| `SCRAPE_PRODUCT_IMAGES` | no | fetch a real product photo to anchor affiliate creative (see below); default `false`, confirmed non-functional |
+
+### Creative scene reasoning
+
+`creative_agent.py` doesn't hand Higgsfield a generic "lifestyle product photo"
+template — it first makes an OpenRouter call (`CREATIVE_MODEL`) asking the
+model to reason concretely about how the product is actually used, and
+describe a specific, full-bleed real-world scene (e.g. "spice jars on a rack,
+a hand sprinkling seasoning onto food while cooking" rather than a product
+floating on a white background). The prompt explicitly forbids plain/empty
+backgrounds and reserved negative space — the compositor's gradient scrim and
+stroke-outlined text (see below) are legible over a busy image on their own,
+so there's no need to ask the image model to leave blank space for text. If
+this call fails (missing key, budget cap, bad response), it falls back to a
+simpler static prompt that still avoids plain backgrounds — this never blocks
+a cycle, but produces a less specific scene.
 
 ### Product imagery (affiliate posts)
 

@@ -143,6 +143,9 @@ class Config:
     # DIFFERENT model for the verifier so the judgement is an independent check,
     # not the copywriter grading its own homework.
     verifier_model: str = field(default_factory=lambda: _env_str("VERIFIER_MODEL", "openai/gpt-4o-mini"))
+    # Used by creative_agent to reason about a concrete in-use demonstration
+    # scene (not a generic product-on-white prompt) before calling Higgsfield.
+    creative_model: str = field(default_factory=lambda: _env_str("CREATIVE_MODEL", "anthropic/claude-sonnet-5"))
 
     # --- Higgsfield (image generation) ---
     # Per https://docs.higgsfield.ai (How to use API): async queue pattern —
