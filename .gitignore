@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets & local config
+.env
+
+# Runtime data
+*.db
+*.sqlite
+*.sqlite3
+alerts.log
+
+# Generated images
+*.png
+*.jpg
+*.jpeg
+generated/
+output/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
