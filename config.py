@@ -130,11 +130,12 @@ class Config:
     )
     # Cheap/fast model for scouting.
     scout_model: str = field(default_factory=lambda: _env_str("SCOUT_MODEL", "openai/gpt-4o-mini"))
-    # Claude model for copywriting.
-    copywriter_model: str = field(default_factory=lambda: _env_str("COPYWRITER_MODEL", "anthropic/claude-3.5-sonnet"))
+    # Claude model for copywriting. NOTE: OpenRouter model slugs drift over time;
+    # if a call 404s, check https://openrouter.ai/models for the current slug.
+    copywriter_model: str = field(default_factory=lambda: _env_str("COPYWRITER_MODEL", "anthropic/claude-sonnet-5"))
     # DIFFERENT model for the verifier so the judgement is an independent check,
     # not the copywriter grading its own homework.
-    verifier_model: str = field(default_factory=lambda: _env_str("VERIFIER_MODEL", "google/gemini-flash-1.5"))
+    verifier_model: str = field(default_factory=lambda: _env_str("VERIFIER_MODEL", "openai/gpt-4o-mini"))
 
     # --- Higgsfield (image generation) ---
     higgsfield_api_key: Optional[str] = field(default_factory=lambda: _env_str("HIGGSFIELD_API_KEY"))

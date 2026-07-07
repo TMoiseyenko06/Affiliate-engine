@@ -151,6 +151,16 @@ class OpenRouterClient:
             )
             resp.raise_for_status()
             data = resp.json()
+        except requests.HTTPError as exc:
+            # Surface OpenRouter's own error body — a 404 here usually means the
+            # model slug is unknown/deprecated, or your account's data-policy
+            # settings expose no endpoint for it ("No endpoints found ...").
+            body = ""
+            if exc.response is not None:
+                body = (exc.response.text or "")[:500]
+            raise ApiError(
+                f"OpenRouter HTTP error for model '{model}': {exc} :: {body}"
+            ) from exc
         except requests.RequestException as exc:
             raise ApiError(f"OpenRouter request failed: {exc}") from exc
         except ValueError as exc:  # invalid JSON envelope
