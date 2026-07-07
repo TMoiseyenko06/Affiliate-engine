@@ -126,10 +126,22 @@ real product data — the verifier re-checks both independently.
 
 ### Product imagery (affiliate posts)
 
-For affiliate pins, the creative step *can* anchor image generation on the
-real Amazon product photo (as a Higgsfield reference image) instead of
-letting the model hallucinate what the product looks like — but **the
-scraper that would supply that photo is confirmed non-functional**:
+**When a real product photo is available, it is used DIRECTLY as the pin's
+base image — Higgsfield is not called at all for that pin.** Earlier this
+pipeline tried anchoring *generation* on a reference photo (asking Higgsfield
+to recreate the product in a new scene), but no generative model — Higgsfield
+included — reliably preserves an exact product's shape, color, and label
+design; testing showed it producing a plausible-looking but *completely
+different* fictional product. Showing a product that doesn't match what's
+actually sold at the link is a real misrepresentation risk, not just a style
+issue, so the only approach that guarantees fidelity is using the real photo
+verbatim: `creative_agent.generate_creative()` downloads it and hands it
+straight to the compositor for cropping/resizing and the title overlay — no
+AI involved in the visual at all. If the download fails, it falls back to
+full AI generation (scene-reasoning prompt + Higgsfield) rather than blocking
+the cycle, so a flaky image URL degrades gracefully instead of failing.
+
+Getting that real photo in the first place is the harder problem:
 
 - `amazon_scraper.py` fetches a listing's primary image via plain HTTP. In
   testing, Amazon's bot wall (`opfcaptcha.amazon.com`) blocked every single
@@ -140,16 +152,20 @@ scraper that would supply that photo is confirmed non-functional**:
   measures, or a paid scraping proxy service).
 - The intended long-term source is the official **Product Advertising API
   (PA-API 5.0)**, which requires an approved Associates account (qualifying
-  recent sales) and AWS-style request signing. Swap it in by replacing the
-  body of `fetch_product_image_url()` in `amazon_scraper.py` — no caller
-  changes needed, the rest of the pipeline just consumes whatever URL (or
-  `None`) comes back.
-- **For testing without a working image source**, set
-  `TEST_PRODUCT_IMAGE_URL` to any real image URL — it's used as the
-  reference photo whenever no scraped image is available, so you can
-  exercise the compositor + Higgsfield reference-image flow with real
-  imagery today. It applies the same image to every affiliate product, so
-  it's a testing aid only, not for production.
+  recent sales) and AWS-style request signing and returns real image URLs
+  directly. Swap it in by replacing the body of `fetch_product_image_url()`
+  in `amazon_scraper.py` — no caller changes needed, the rest of the pipeline
+  just consumes whatever URL (or `None`) comes back.
+- **For testing without a working scraper**, set `TEST_PRODUCT_IMAGE_URL` to
+  any real image URL — used as the reference photo whenever no scraped image
+  is available, so you can exercise the real pipeline today. It applies the
+  same image to every affiliate product, so it's a testing aid only, not for
+  production.
+- When no real photo is available at all (scraping off, no test URL, product
+  has no image), affiliate creative falls back to the AI scene-reasoning path
+  described above — a plausible but not guaranteed-accurate depiction. This
+  is the accepted tradeoff until a real image source (PA-API) is wired up for
+  every product, not a bug.
 - **To test one specific product repeatedly** instead of whatever the
   ranking step picks, set `TEST_FORCE_PRODUCT_URL` to any Amazon product URL
   — direct listing links and short links (`a.co`, `amzn.to`) both work; short

@@ -13,6 +13,8 @@ import os
 import tempfile
 from typing import Any, Dict, Optional, Tuple
 
+import requests
+
 from config import CONFIG, PIN_IMAGE_HEIGHT, PIN_IMAGE_WIDTH
 from db import Database
 from .clients import ApiError, HiggsfieldClient, OpenRouterClient
@@ -166,6 +168,30 @@ def build_image_prompt(
     return scene_prompt or _static_fallback_prompt(content_type, copy, subject)
 
 
+def _download_reference_image(url: str) -> Optional[bytes]:
+    """Fetch a real product photo. Never raises; None on any failure so the
+    caller can fall back to generation rather than blocking the cycle."""
+    try:
+        resp = requests.get(url, timeout=CONFIG.http_timeout_seconds)
+        resp.raise_for_status()
+        return resp.content
+    except requests.RequestException as exc:
+        logger.warning("Failed to download reference image %s: %s", url, exc)
+        return None
+
+
+def _save_image(content_type: str, image_bytes: bytes, output_dir: Optional[str], tag: str) -> str:
+    out_dir = output_dir or tempfile.gettempdir()
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"creative_{content_type}_{os.getpid()}_{abs(hash(tag)) % 10000}.png")
+    try:
+        with open(path, "wb") as fh:
+            fh.write(image_bytes)
+    except OSError as exc:
+        raise ApiError(f"Failed to save image: {exc}") from exc
+    return path
+
+
 def generate_creative(
     content_type: str,
     copy: Dict[str, Any],
@@ -176,13 +202,31 @@ def generate_creative(
 ) -> Tuple[str, bytes]:
     """Generate the base image; return (path, bytes). Raises ``ApiError``.
 
-    When ``mock`` is True, no image API is called: a locally drawn 1000x1500
-    placeholder is produced instead (for testing the pipeline without a
-    Higgsfield key). A mock image is intended only for ``--dry-run``.
+    When a real product photo is available (``subject['image_url']``, affiliate
+    only), it is used DIRECTLY as the base image rather than asking a
+    generative model to recreate the product — no text-to-image or
+    reference-guided generation can reliably preserve an exact product's
+    shape, color, and label design, and showing a product that doesn't match
+    what's actually sold at the link is a real misrepresentation risk, not
+    just a style issue. AI generation is only used when no real photo exists.
+
+    When ``mock`` is True and no real photo is available, a locally drawn
+    1000x1500 placeholder is produced instead (for testing the pipeline
+    without a Higgsfield key). A mock image is intended only for ``--dry-run``.
     """
     from db import get_db
 
     db = db or get_db()
+
+    reference_image_url = subject.get("image_url") if content_type == "affiliate" else None
+    if reference_image_url:
+        image_bytes = _download_reference_image(reference_image_url)
+        if image_bytes is not None:
+            logger.info("Using real product photo directly (no AI generation): %s", reference_image_url)
+            path = _save_image(content_type, image_bytes, output_dir, reference_image_url)
+            return path, image_bytes
+        logger.warning("Falling back to AI generation since the reference photo could not be fetched")
+
     prompt = build_image_prompt(content_type, copy, subject, db=db)
     logger.info("Image prompt: %s", prompt)
 
@@ -191,21 +235,9 @@ def generate_creative(
         logger.warning("MOCK image generated (no Higgsfield call) — dry-run only")
     else:
         client = HiggsfieldClient(db=db)
-        # Affiliate posts anchor generation on the real product photo when one
-        # was found (see amazon_scraper); organic has no product to reference.
-        reference_image_url = subject.get("image_url") if content_type == "affiliate" else None
-        image_bytes = client.generate_image(
-            prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT, reference_image_url=reference_image_url
-        )
+        image_bytes = client.generate_image(prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)
 
-    out_dir = output_dir or tempfile.gettempdir()
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"creative_{content_type}_{os.getpid()}_{abs(hash(prompt)) % 10000}.png")
-    try:
-        with open(path, "wb") as fh:
-            fh.write(image_bytes)
-    except OSError as exc:
-        raise ApiError(f"Failed to save generated image: {exc}") from exc
+    path = _save_image(content_type, image_bytes, output_dir, prompt)
     return path, image_bytes
 
 
