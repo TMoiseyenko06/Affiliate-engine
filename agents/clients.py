@@ -201,13 +201,22 @@ class HiggsfieldClient:
             "Content-Type": "application/json",
         }
 
-    def generate_image(self, prompt: str, width: int, height: int) -> bytes:
+    def generate_image(
+        self, prompt: str, width: int, height: int, reference_image_url: Optional[str] = None
+    ) -> bytes:
         """Generate an image and return raw bytes.
 
         Submits to the queue, polls until ``completed``, then downloads the
         resulting image URL. Raises ``ApiError`` on failure (including
         ``failed``/``nsfw`` terminal statuses) and ``BudgetError`` when the
         daily cap is hit.
+
+        If ``reference_image_url`` is given, it's sent as a reference/input
+        image so generation is anchored on a real product photo. The exact
+        request field for this is UNVERIFIED against Higgsfield's own docs
+        (see HIGGSFIELD_IMAGE_PARAM) — if the submit call rejects it, this
+        automatically retries once as a plain text-to-image request rather
+        than failing the whole cycle over an optional enhancement.
         """
         if not self.api_key or not self.api_secret:
             raise ApiError(
@@ -218,16 +227,30 @@ class HiggsfieldClient:
             check_and_consume_budget(self.db, self.PROVIDER, CONFIG.higgsfield_daily_call_cap)
 
         aspect_ratio = _aspect_ratio_string(width, height)
-        request_id = self._submit_job(prompt, aspect_ratio)
+        try:
+            request_id = self._submit_job(prompt, aspect_ratio, reference_image_url)
+        except ApiError:
+            if reference_image_url is None:
+                raise
+            logger.warning(
+                "Higgsfield submit with reference image failed; retrying as text-only "
+                "(check HIGGSFIELD_IMAGE_PARAM if this keeps happening)",
+            )
+            request_id = self._submit_job(prompt, aspect_ratio, None)
+
         image_url = self._poll_job(request_id)
         return self._download(image_url)
 
-    def _submit_job(self, prompt: str, aspect_ratio: str) -> str:
+    def _submit_job(
+        self, prompt: str, aspect_ratio: str, reference_image_url: Optional[str] = None
+    ) -> str:
         payload = {
             "prompt": prompt,
             "aspect_ratio": aspect_ratio,
             "resolution": CONFIG.higgsfield_resolution,
         }
+        if reference_image_url:
+            payload[CONFIG.higgsfield_image_param] = reference_image_url
         try:
             resp = requests.post(
                 f"{self.base_url}/{self.model_id}",

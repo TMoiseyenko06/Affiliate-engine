@@ -89,6 +89,13 @@ def _env_list(name: str, default: List[str]) -> List[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 # ---------------------------------------------------------------------------
 # Pinterest field limits (Pinterest API v5 / product constraints).
 # Centralised so the copywriter prompt and the verifier agree on the numbers.
@@ -160,6 +167,22 @@ class Config:
     higgsfield_poll_timeout_seconds: int = field(
         default_factory=lambda: _env_int("HIGGSFIELD_POLL_TIMEOUT_SECONDS", 180)
     )
+    # JSON body field name for a reference/input image in the submit payload.
+    # UNVERIFIED against Higgsfield's own docs (their reference-image guide page
+    # was unreachable while building this) — third-party mirrors of the Soul
+    # model converge on "image". If real runs show this is wrong, override via
+    # env; the client degrades gracefully (retries text-only) either way.
+    higgsfield_image_param: str = field(default_factory=lambda: _env_str("HIGGSFIELD_IMAGE_PARAM", "image"))
+
+    # --- Amazon product image sourcing (for affiliate creative reference) ---
+    # Interim measure until the official Product Advertising API is wired up
+    # (that requires an approved Associates account + AWS-style signing).
+    # Scrapes the product listing page for its primary image (og:image meta
+    # tag, falling back to Amazon's embedded high-res image JSON). This is
+    # against Amazon's Terms of Service and fragile to markup changes — treat
+    # it as a stopgap, not the long-term source. Never blocks a cycle: on any
+    # failure it returns no image and creative falls back to pure text-to-image.
+    scrape_product_images: bool = field(default_factory=lambda: _env_bool("SCRAPE_PRODUCT_IMAGES", True))
 
     # --- Pinterest API v5 ---
     pinterest_access_token: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_ACCESS_TOKEN"))

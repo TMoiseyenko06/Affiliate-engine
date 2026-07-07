@@ -92,6 +92,35 @@ All secrets are read from the environment — **never hardcoded**. See
 | `OPENROUTER_DAILY_CALL_CAP`, `HIGGSFIELD_DAILY_CALL_CAP` | no | per-day budget caps |
 | `DATABASE_URL` | no | defaults to `sqlite:///affiliate_engine.db` |
 | `ALERT_FILE_PATH`, `DEADMAN_HOURS`, `ALERT_WEBHOOK_URL` | no | alerting |
+| `SCRAPE_PRODUCT_IMAGES` | no | fetch a real product photo to anchor affiliate creative (see below); default `true` |
+
+### Product imagery (affiliate posts)
+
+For affiliate pins, the creative step tries to anchor image generation on the
+**real Amazon product photo** rather than letting the model hallucinate what
+the product looks like. `amazon_scraper.py` fetches the listing's primary
+image (`og:image` meta tag, with a fallback to Amazon's embedded image JSON)
+and passes it to Higgsfield as a reference image.
+
+**This is an interim measure, not a durable solution:**
+- Scraping the listing page is against Amazon's Terms of Service and fragile
+  to markup changes. It's meant for testing now; the intended long-term
+  source is the official **Product Advertising API (PA-API 5.0)**, which
+  requires an approved Associates account (qualifying recent sales) and
+  AWS-style request signing — swap it in by replacing the body of
+  `fetch_product_image_url()` in `amazon_scraper.py`; no caller changes needed.
+- Set `SCRAPE_PRODUCT_IMAGES=false` to disable it entirely (falls back to pure
+  text-to-image generation, as before).
+- The exact Higgsfield request field for a reference image
+  (`HIGGSFIELD_IMAGE_PARAM`, default `image`) is **unverified** against their
+  own docs — if it's wrong, `HiggsfieldClient` automatically retries the same
+  request as text-only rather than failing the cycle, so a wrong param name
+  degrades gracefully instead of blocking posts. If you see repeated
+  "retrying as text-only" warnings in the logs, correct the env var once you
+  find the right field name in Higgsfield's dashboard/support.
+- If no image can be scraped (page blocked, layout changed, product has no
+  `og:image`), the pipeline silently falls back to text-to-image — this never
+  blocks a cycle.
 
 **Loading them:** the app auto-loads a `.env` file from the working directory
 at startup (dependency-free, cross-platform) — just create `.env` and run.

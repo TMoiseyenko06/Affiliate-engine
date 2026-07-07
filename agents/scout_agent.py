@@ -127,6 +127,11 @@ def scout_product(
     if ranked is None:
         ranked = _deterministic_pick(fresh)
 
+    # Best-effort real product image for the creative step; None is fine.
+    from amazon_scraper import fetch_product_image_url
+
+    ranked["image_url"] = fetch_product_image_url(ranked.get("source_url", ""))
+
     # Persist the chosen product so it counts toward reuse exclusion.
     db.upsert_product(
         product_id=ranked["product_id"],

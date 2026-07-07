@@ -68,7 +68,12 @@ def generate_creative(
         logger.warning("MOCK image generated (no Higgsfield call) — dry-run only")
     else:
         client = HiggsfieldClient(db=db)
-        image_bytes = client.generate_image(prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)
+        # Affiliate posts anchor generation on the real product photo when one
+        # was found (see amazon_scraper); organic has no product to reference.
+        reference_image_url = subject.get("image_url") if content_type == "affiliate" else None
+        image_bytes = client.generate_image(
+            prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT, reference_image_url=reference_image_url
+        )
 
     out_dir = output_dir or tempfile.gettempdir()
     os.makedirs(out_dir, exist_ok=True)
