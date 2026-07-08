@@ -231,7 +231,10 @@ class Database:
 
     def recent_affiliate_ratio(self, lookback_posts: int) -> float:
         """Fraction of the last ``lookback_posts`` *successful* posts that were
-        affiliate. Returns 0.0 when there is no history yet."""
+        any affiliate variant (with or without a title overlay). Returns 0.0
+        when there is no history yet."""
+        from config import AFFILIATE_CONTENT_TYPES
+
         with self._cursor() as cur:
             cur.execute(
                 """
@@ -244,8 +247,29 @@ class Database:
             rows = cur.fetchall()
         if not rows:
             return 0.0
-        affiliate = sum(1 for r in rows if r["content_type"] == "affiliate")
+        affiliate = sum(1 for r in rows if r["content_type"] in AFFILIATE_CONTENT_TYPES)
         return affiliate / len(rows)
+
+    def recent_content_type_fractions(self, lookback_posts: int) -> Dict[str, float]:
+        """Fraction of the last ``lookback_posts`` *successful* posts for each
+        distinct content_type value seen. Empty dict when there is no history."""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT content_type FROM posts
+                WHERE status = 'posted'
+                ORDER BY id DESC LIMIT ?
+                """,
+                (lookback_posts,),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return {}
+        counts: Dict[str, int] = {}
+        for r in rows:
+            counts[r["content_type"]] = counts.get(r["content_type"], 0) + 1
+        total = len(rows)
+        return {k: v / total for k, v in counts.items()}
 
     def last_successful_post_time(self) -> Optional[datetime]:
         with self._cursor() as cur:

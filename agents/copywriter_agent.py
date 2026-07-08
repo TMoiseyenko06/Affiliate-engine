@@ -129,14 +129,19 @@ def write_copy(
 ) -> Dict[str, Any]:
     """Generate and validate Pinterest copy.
 
-    ``subject`` is the product dict (affiliate) or a topic dict (organic).
+    ``subject`` is the product dict (affiliate / affiliate_image_only) or a
+    topic dict (organic). affiliate_image_only uses the identical affiliate
+    copy path — the Pinterest title/description/disclosure/link are unrelated
+    to whether the compositor draws a title band onto the image; only the
+    image treatment differs (see compositor.py / orchestrator.py).
     Raises ``ApiError`` / ``ValueError`` on failure.
     """
+    from config import AFFILIATE_CONTENT_TYPES
     from db import get_db
 
     db = db or get_db()
 
-    if content_type == "affiliate":
+    if content_type in AFFILIATE_CONTENT_TYPES:
         return _write_affiliate(subject, angle, db, extra_context)
     elif content_type == "organic":
         return _write_organic(subject, angle, db, extra_context)

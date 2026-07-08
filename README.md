@@ -5,9 +5,15 @@ Amazon Associates affiliate links. It runs unattended on a schedule (3–5×/day
 via cron) and applies a **hard verification gate** before anything is posted
 publicly.
 
-Each cycle either publishes an **affiliate** pin (product-anchored, disclosed,
-Associates-tagged) or an **organic** value pin (no product, no CTA, no link),
-chosen to steer the actual affiliate/organic ratio toward a configured target.
+Each cycle publishes one of three content types, chosen to steer the actual
+mix toward a configured target (default: even thirds):
+- **affiliate** — product-anchored, disclosed, Associates-tagged, with a
+  pain-point/curiosity title overlaid on the image.
+- **affiliate_image_only** — the identical product/copy/compliance pipeline,
+  but with NO text drawn on the image at all — the product photo speaks for
+  itself. The Pinterest title, description, disclosure, and tagged link are
+  unaffected; only the image differs.
+- **organic** — no product, no CTA, no link — pure niche value content.
 
 ---
 
@@ -34,16 +40,23 @@ analytics_pull.py  separate periodic pull from Pinterest Analytics -> performanc
 
 ### Flow of one cycle
 
-1. **Decide** – Orchestrator compares the target affiliate ratio against the
-   actual ratio over recent posts and picks `affiliate` or `organic`.
-2. **Select subject** – affiliate → scout returns a product **not used within
-   the lookback window**; organic → an unused topic/angle for the niche.
-3. **Copywriter** – produces structured JSON copy. Affiliate mode injects the
-   verbatim Associates disclosure and a correctly-tagged (non-cloaked) link;
-   organic mode forbids product/CTA/link.
-4. **Creative** – builds an image prompt and calls Higgsfield for a 2:3 image.
+1. **Decide** – Orchestrator computes each content type's actual share of
+   recent posts vs. its target and picks whichever is furthest under target
+   (`agents/orchestrator.py::decide_content_type`).
+2. **Select subject** – `affiliate` / `affiliate_image_only` → scout returns a
+   product **not used within the lookback window**; `organic` → an unused
+   topic/angle for the niche.
+3. **Copywriter** – produces structured JSON copy. Both affiliate variants use
+   the identical path: verbatim Associates disclosure + a correctly-tagged
+   (non-cloaked) link, pain-point/curiosity title; organic forbids
+   product/CTA/link. The image-only distinction doesn't touch this step at
+   all — the Pinterest title/description are the same either way.
+4. **Creative** – builds an image scene prompt and generates/edits a 2:3
+   image (see "Creative scene reasoning" below).
 5. **Compositor** – overlays the title with Pillow and validates aspect ratio
-   and file size (no LLM).
+   and file size (no LLM) — **unless** `content_type == affiliate_image_only`,
+   in which case the title overlay is skipped entirely and the image is used
+   as-is.
 6. **Verifier (hard gate)** – deterministic checks first (disclosure, link/tag,
    dimensions, size, duplicates, char limits), then an **independent LLM review
    using a different model** than the copywriter/orchestrator. Nothing bypasses
@@ -87,7 +100,7 @@ All secrets are read from the environment — **never hardcoded**. See
 | `AMAZON_ASSOCIATES_TAG` | yes | Associates tag appended to every affiliate link |
 | `AFFILIATE_DISCLOSURE_TEXT` | no | verbatim disclosure (has a default) |
 | `SCOUT_MODEL` / `COPYWRITER_MODEL` / `CREATIVE_MODEL` / `VERIFIER_MODEL` | no | model routing; **keep the verifier model different** from the copywriter so review is independent |
-| `NICHES`, `TARGET_AFFILIATE_RATIO`, `DAILY_POST_COUNT` | no | content strategy |
+| `NICHES`, `TARGET_AFFILIATE_RATIO`, `TARGET_AFFILIATE_IMAGE_ONLY_RATIO`, `TARGET_ORGANIC_RATIO`, `DAILY_POST_COUNT` | no | content strategy — 3-way target mix, defaults to even thirds |
 | `REUSE_LOOKBACK_DAYS` | no | don’t reuse a product/topic within N days |
 | `OPENROUTER_DAILY_CALL_CAP`, `HIGGSFIELD_DAILY_CALL_CAP` | no | per-day budget caps |
 | `DATABASE_URL` | no | defaults to `sqlite:///affiliate_engine.db` |
@@ -142,9 +155,10 @@ real product data — the verifier re-checks both independently.
 
 ### Pin title overlay
 
-`compositor.py` draws the title in a band anchored to the **bottom** of the
-image (not the top), and deliberately does **not** look the same on every
-pin — each call to `compose()` independently randomizes:
+For `affiliate` and `organic` posts, `compositor.py` draws the title in a
+band anchored to the **bottom** of the image (not the top), and deliberately
+does **not** look the same on every pin — each call to `compose()`
+independently randomizes:
 
 - **Background shape**: a clean rounded card, a soft gradient fade, a
   smooth sine-wave top edge, an irregular "torn paper" edge, or a row of
@@ -171,6 +185,14 @@ itself. All fonts are bundled directly in the repo rather than relying on
 whatever happens to be installed on the machine running the pipeline — an
 earlier version depended on OS font paths and silently fell back to PIL's
 ~10px placeholder font on Windows, rendering text far smaller than intended.
+
+For `affiliate_image_only` posts, `compose()` is called with
+`draw_title_overlay=False` and skips all of the above entirely — no shape, no
+palette, no font, no text at all is drawn on the image; the product photo (or
+generated scene) is used exactly as produced. The verifier deterministically
+checks that this actually happened (`image_meta["title_drawn"]` must be
+`False` for image-only posts and `True` for the other two types) — a
+mismatch fails the gate rather than silently posting the wrong treatment.
 
 ### Product imagery (affiliate posts)
 
@@ -388,9 +410,10 @@ python -m unittest discover -s tests -v
 
 The verifier tests assert that missing disclosures, wrong/missing/cloaked
 Associates tags, bad dimensions, oversized images, over-limit text, duplicate
-products, and organic CTA/link leakage are all caught. The DB tests cover
-posts, ratio computation, product/topic reuse windows, budget counters, and
-alerts.
+products, organic CTA/link leakage, and title-overlay/content-type mismatches
+(the `affiliate_image_only` guarantee) are all caught. The DB tests cover
+posts, ratio computation (including the 3-way content-type breakdown),
+product/topic reuse windows, budget counters, and alerts.
 
 ---
 

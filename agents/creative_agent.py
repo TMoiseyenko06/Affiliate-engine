@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import requests
 
-from config import CONFIG, PIN_IMAGE_HEIGHT, PIN_IMAGE_WIDTH
+from config import AFFILIATE_CONTENT_TYPES, CONFIG, PIN_IMAGE_HEIGHT, PIN_IMAGE_WIDTH
 from db import Database
 from .clients import ApiError, BudgetError, HiggsfieldClient, OpenRouterClient
 
@@ -115,7 +115,7 @@ def _static_fallback_prompt(content_type: str, copy: Dict[str, Any], subject: Di
     """
     keywords = ", ".join(copy.get("keywords", [])[:6])
     pain_point = copy.get("title", "")
-    if content_type == "affiliate":
+    if content_type in AFFILIATE_CONTENT_TYPES:
         product_title = subject.get("title", "")
         category = subject.get("category", CONFIG.primary_niche())
         features = ", ".join(subject.get("features", [])[:4])
@@ -164,7 +164,7 @@ def _build_scene_prompt_llm(
     what's really being sold.
     """
     client = OpenRouterClient(db=db)
-    if content_type == "affiliate":
+    if content_type in AFFILIATE_CONTENT_TYPES:
         system_prompt = AFFILIATE_SCENE_SYSTEM_PROMPT
         has_reference_photo = bool(subject.get("image_url"))
         user_prompt = (
@@ -299,7 +299,7 @@ def generate_creative(
 
     db = db or get_db()
 
-    reference_image_url = subject.get("image_url") if content_type == "affiliate" else None
+    reference_image_url = subject.get("image_url") if content_type in AFFILIATE_CONTENT_TYPES else None
     if reference_image_url:
         if not mock:
             edited = _edit_reference_image(content_type, copy, subject, reference_image_url, db)
@@ -391,7 +391,7 @@ def _mock_image(content_type: str, copy: Dict[str, Any], subject: Dict[str, Any]
     from PIL import Image, ImageDraw
 
     # Distinct background per mode so it's obvious at a glance.
-    bg = (206, 214, 224) if content_type == "affiliate" else (214, 224, 210)
+    bg = (206, 214, 224) if content_type in AFFILIATE_CONTENT_TYPES else (214, 224, 210)
     img = Image.new("RGB", (PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT), bg)
     draw = ImageDraw.Draw(img)
     label = subject.get("title") or subject.get("topic") or content_type

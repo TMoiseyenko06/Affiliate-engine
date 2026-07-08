@@ -16,7 +16,7 @@ from agents.verifier_agent import run_deterministic_checks
 from agents.copywriter_agent import build_associates_link
 
 
-def good_image_meta():
+def good_image_meta(title_drawn=True):
     return {
         "width": PIN_IMAGE_WIDTH,
         "height": PIN_IMAGE_HEIGHT,
@@ -24,6 +24,7 @@ def good_image_meta():
         "size_bytes": 500_000,
         "aspect_ok": True,
         "size_ok": True,
+        "title_drawn": title_drawn,
     }
 
 
@@ -145,6 +146,80 @@ class VerifierAffiliateTests(unittest.TestCase):
             "affiliate", good_affiliate_copy(), good_image_meta(), self.subject, self.db
         )
         self.assertTrue(any("already posted" in f.lower() for f in failures))
+
+
+class VerifierAffiliateImageOnlyTests(unittest.TestCase):
+    """affiliate_image_only shares all affiliate compliance rules (disclosure,
+    link, tag, dedup) but must have NO title drawn on the image."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.db = Database(f"sqlite:///{self.path}")
+        self.subject = {"product_id": "B01", "title": "Storage Bins", "category": "home"}
+
+    def tearDown(self):
+        self.db.close()
+        os.unlink(self.path)
+
+    def test_valid_image_only_passes(self):
+        failures = run_deterministic_checks(
+            "affiliate_image_only", good_affiliate_copy(), good_image_meta(title_drawn=False),
+            self.subject, self.db,
+        )
+        self.assertEqual(failures, [], failures)
+
+    def test_image_only_still_requires_disclosure(self):
+        copy = good_affiliate_copy()
+        copy["description"] = "Keep everything neat and tidy with these bins."
+        failures = run_deterministic_checks(
+            "affiliate_image_only", copy, good_image_meta(title_drawn=False), self.subject, self.db
+        )
+        self.assertTrue(any("disclosure" in f.lower() for f in failures))
+
+    def test_image_only_still_requires_correct_link(self):
+        copy = good_affiliate_copy()
+        copy["link"] = "https://bit.ly/xyz?tag=example-20"
+        copy["link_or_null"] = copy["link"]
+        failures = run_deterministic_checks(
+            "affiliate_image_only", copy, good_image_meta(title_drawn=False), self.subject, self.db
+        )
+        self.assertTrue(any("amazon" in f.lower() or "cloaking" in f.lower() for f in failures))
+
+    def test_image_only_dedup_still_applies(self):
+        self.db.create_post("affiliate_image_only", "B01", "board", "posted")
+        failures = run_deterministic_checks(
+            "affiliate_image_only", good_affiliate_copy(), good_image_meta(title_drawn=False),
+            self.subject, self.db,
+        )
+        self.assertTrue(any("already posted" in f.lower() for f in failures))
+
+
+class TitleOverlayConsistencyTests(unittest.TestCase):
+    """The compositor's title-drawing intent must match content_type."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.db = Database(f"sqlite:///{self.path}")
+        self.subject = {"product_id": "B01", "title": "Storage Bins", "category": "home"}
+
+    def tearDown(self):
+        self.db.close()
+        os.unlink(self.path)
+
+    def test_affiliate_with_title_not_drawn_fails(self):
+        failures = run_deterministic_checks(
+            "affiliate", good_affiliate_copy(), good_image_meta(title_drawn=False), self.subject, self.db
+        )
+        self.assertTrue(any("title overlay" in f.lower() for f in failures))
+
+    def test_image_only_with_title_drawn_fails(self):
+        failures = run_deterministic_checks(
+            "affiliate_image_only", good_affiliate_copy(), good_image_meta(title_drawn=True),
+            self.subject, self.db,
+        )
+        self.assertTrue(any("title overlay" in f.lower() for f in failures))
 
 
 class VerifierOrganicTests(unittest.TestCase):

@@ -46,6 +46,30 @@ class DbTestCase(unittest.TestCase):
         self.db.create_post("organic", "o", "b", "posted")
         self.assertEqual(self.db.recent_affiliate_ratio(10), 0.0)
 
+    def test_recent_affiliate_ratio_counts_image_only(self):
+        self.db.create_post("affiliate_image_only", "a", "b", "posted")
+        self.db.create_post("organic", "o", "b", "posted")
+        self.assertAlmostEqual(self.db.recent_affiliate_ratio(10), 0.5)
+
+    def test_recent_content_type_fractions_empty(self):
+        self.assertEqual(self.db.recent_content_type_fractions(10), {})
+
+    def test_recent_content_type_fractions_three_way(self):
+        self.db.create_post("affiliate", "a", "b", "posted")
+        self.db.create_post("affiliate_image_only", "a2", "b", "posted")
+        self.db.create_post("organic", "o", "b", "posted")
+        self.db.create_post("organic", "o2", "b", "posted")
+        fractions = self.db.recent_content_type_fractions(10)
+        self.assertAlmostEqual(fractions["affiliate"], 0.25)
+        self.assertAlmostEqual(fractions["affiliate_image_only"], 0.25)
+        self.assertAlmostEqual(fractions["organic"], 0.5)
+
+    def test_recent_content_type_fractions_ignores_non_posted(self):
+        self.db.create_post("affiliate", "a", "b", "skipped")
+        self.db.create_post("organic", "o", "b", "posted")
+        fractions = self.db.recent_content_type_fractions(10)
+        self.assertEqual(fractions, {"organic": 1.0})
+
     def test_product_reuse_tracking(self):
         self.db.upsert_product("B01", "Widget", 0.05, "src")
         self.assertFalse(self.db.product_used_within("B01", 14))

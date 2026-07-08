@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 from config import (
+    AFFILIATE_CONTENT_TYPES,
     CONFIG,
     PINTEREST_DESCRIPTION_MAX,
     PINTEREST_MAX_IMAGE_BYTES,
@@ -87,7 +88,19 @@ def run_deterministic_checks(
     elif size_bytes > PINTEREST_MAX_IMAGE_BYTES:
         failures.append(f"Image size {size_bytes} exceeds cap {PINTEREST_MAX_IMAGE_BYTES}.")
 
-    if content_type == "affiliate":
+    # --- title-overlay intent must match content_type ---
+    # affiliate_image_only pins must have NO text drawn on the image (the
+    # product speaks for itself); the other two types must have it. This is
+    # a deterministic guarantee, independent of whatever the compositor did.
+    expected_title_drawn = content_type != "affiliate_image_only"
+    actual_title_drawn = bool(image_meta.get("title_drawn"))
+    if expected_title_drawn != actual_title_drawn:
+        failures.append(
+            f"Title overlay presence mismatch for content_type={content_type}: "
+            f"expected title_drawn={expected_title_drawn}, got {actual_title_drawn}."
+        )
+
+    if content_type in AFFILIATE_CONTENT_TYPES:
         failures.extend(_affiliate_checks(copy, description, subject, db))
     elif content_type == "organic":
         failures.extend(_organic_checks(copy, description))
@@ -206,7 +219,7 @@ def run_llm_checks(
         "link": copy.get("link") or copy.get("link_or_null"),
         "subject_data": subject_data,
     }
-    if content_type == "affiliate":
+    if content_type in AFFILIATE_CONTENT_TYPES:
         criteria = (
             "Checks: (a) does the copy match the actual product data with NO "
             "hallucinated features; (b) is the affiliate copy appropriate and "

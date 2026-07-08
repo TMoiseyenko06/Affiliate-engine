@@ -2,9 +2,11 @@
 
 Responsibilities:
 - Read current state from the DB.
-- Decide this cycle's content_type ("affiliate" vs "organic") from the target
-  ratio vs. actual recent history.
-- Affiliate: get a fresh product from the scout. Organic: pick a topic/angle.
+- Decide this cycle's content_type ("affiliate" / "affiliate_image_only" /
+  "organic") from the target mix vs. actual recent history.
+- affiliate & affiliate_image_only: get a fresh product from the scout (same
+  copy pipeline; image_only skips the compositor's title overlay so the
+  product photo speaks for itself). organic: pick a topic/angle.
 - Run copywriter -> creative -> compositor -> verifier -> poster in sequence.
 - Log every step's output and any failure to the DB.
 - On verifier FAIL: retry the content-generation steps exactly once with the
@@ -20,7 +22,7 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from config import CONFIG
+from config import AFFILIATE_CONTENT_TYPES, CONFIG
 from db import Database
 from alerting import alert_skip
 from .clients import ApiError, BudgetError
@@ -46,14 +48,22 @@ ORGANIC_TOPICS = {
 
 
 def decide_content_type(db: Database) -> str:
-    """Choose affiliate vs organic to steer actual ratio toward the target."""
-    actual = db.recent_affiliate_ratio(CONFIG.ratio_lookback_posts)
-    target = CONFIG.target_affiliate_ratio
-    # If we're under target on affiliate share, post affiliate; else organic.
-    choice = "affiliate" if actual < target else "organic"
+    """Choose among affiliate / affiliate_image_only / organic to steer the
+    actual content mix toward the configured targets (default even thirds).
+
+    Picks whichever type is currently furthest under its target share of
+    recent posts — a direct generalization of the old binary "post affiliate
+    if under target, else organic" rule to three categories.
+    """
+    targets = CONFIG.content_type_targets()
+    actual = db.recent_content_type_fractions(CONFIG.ratio_lookback_posts)
+    deficits = {ct: targets[ct] - actual.get(ct, 0.0) for ct in targets}
+    choice = max(deficits, key=deficits.get)
     logger.info(
-        "Ratio decision: actual_affiliate=%.2f target=%.2f -> %s",
-        actual, target, choice,
+        "Content-type decision: targets=%s actual=%s -> %s",
+        {k: round(v, 2) for k, v in targets.items()},
+        {k: round(actual.get(k, 0.0), 2) for k in targets},
+        choice,
     )
     return choice
 
@@ -97,8 +107,13 @@ def _generate_and_verify(
     )
     db.log_step(attempt_id, "creative", "ok", {"path": base_path})
 
-    # 3. Compositor
-    image_meta = compositor_mod.compose(base_path, copy.get("title", ""), content_type=content_type)
+    # 3. Compositor — image_only posts get no title band; the product speaks
+    # for itself. The Pinterest title/description/disclosure/link (below)
+    # still apply identically regardless of what's drawn on the image.
+    image_meta = compositor_mod.compose(
+        base_path, copy.get("title", ""), content_type=content_type,
+        draw_title_overlay=(content_type != "affiliate_image_only"),
+    )
     db.log_step(attempt_id, "compositor", "ok", image_meta)
 
     # 4. Verifier
@@ -145,7 +160,7 @@ def run_cycle(
         db.log_step(attempt_id, "orchestrator.decide", "ok", {"content_type": content_type})
 
         # --- select subject ---
-        if content_type == "affiliate":
+        if content_type in AFFILIATE_CONTENT_TYPES:
             subject = scout_agent.scout_product(db=db)
             angle = "product spotlight"
             db.log_step(attempt_id, "scout", "ok", subject)

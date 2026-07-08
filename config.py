@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -107,13 +107,25 @@ PINTEREST_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 PIN_IMAGE_WIDTH = 1000
 PIN_IMAGE_HEIGHT = 1500  # 2:3 aspect ratio
 
+# Content types that carry an Amazon Associates link/disclosure and share the
+# same compliance rules — they differ only in whether the compositor draws a
+# title band onto the image (see compositor.py / orchestrator.py).
+AFFILIATE_CONTENT_TYPES = ("affiliate", "affiliate_image_only")
+CONTENT_TYPES = ("affiliate", "affiliate_image_only", "organic")
+
 
 @dataclass
 class Config:
     # --- Niche / content strategy ---
     niches: List[str] = field(default_factory=lambda: _env_list("NICHES", ["home_organization"]))
-    # Fraction of posts that should be affiliate (rest are organic value posts).
-    target_affiliate_ratio: float = field(default_factory=lambda: _env_float("TARGET_AFFILIATE_RATIO", 0.4))
+    # Target mix across the three content types (affiliate with a title
+    # overlay / affiliate image-only / organic). Normalized at use-time if
+    # they don't sum to 1.0, so slightly-off values don't crash anything.
+    target_affiliate_ratio: float = field(default_factory=lambda: _env_float("TARGET_AFFILIATE_RATIO", 1 / 3))
+    target_affiliate_image_only_ratio: float = field(
+        default_factory=lambda: _env_float("TARGET_AFFILIATE_IMAGE_ONLY_RATIO", 1 / 3)
+    )
+    target_organic_ratio: float = field(default_factory=lambda: _env_float("TARGET_ORGANIC_RATIO", 1 / 3))
     daily_post_count: int = field(default_factory=lambda: _env_int("DAILY_POST_COUNT", 4))
     # Recent-history window used when computing the actual affiliate/organic ratio.
     ratio_lookback_posts: int = field(default_factory=lambda: _env_int("RATIO_LOOKBACK_POSTS", 20))
@@ -253,6 +265,19 @@ class Config:
 
     def primary_niche(self) -> str:
         return self.niches[0] if self.niches else "general"
+
+    def content_type_targets(self) -> Dict[str, float]:
+        """Normalized target fraction for each of the three content types."""
+        raw = {
+            "affiliate": max(self.target_affiliate_ratio, 0.0),
+            "affiliate_image_only": max(self.target_affiliate_image_only_ratio, 0.0),
+            "organic": max(self.target_organic_ratio, 0.0),
+        }
+        total = sum(raw.values())
+        if total <= 0:
+            # Degenerate config (all zero/negative) — split evenly rather than divide by zero.
+            return {k: 1 / 3 for k in raw}
+        return {k: v / total for k, v in raw.items()}
 
     def validate_for_live_run(self) -> List[str]:
         """Return a list of missing config required for a real (non-dry-run) cycle.

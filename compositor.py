@@ -85,11 +85,19 @@ def compose(
     output_path: Optional[str] = None,
     max_bytes: int = PINTEREST_MAX_IMAGE_BYTES,
     content_type: str = "",
+    draw_title_overlay: bool = True,
 ) -> Dict[str, Any]:
-    """Overlay ``title`` on the base image and save the result.
+    """Overlay ``title`` on the base image (unless ``draw_title_overlay`` is
+    False) and save the result.
+
+    ``draw_title_overlay=False`` produces an image-only pin — the product
+    photo/scene with no text band, no title drawn at all. The Pinterest
+    title/description/disclosure/link are unaffected either way; only the
+    image itself differs.
 
     Returns metadata: {path, width, height, aspect_ratio, size_bytes,
-    aspect_ok, size_ok}. Raises ``CompositorError`` on unrecoverable failure.
+    aspect_ok, size_ok, title_drawn}. Raises ``CompositorError`` on
+    unrecoverable failure.
     """
     try:
         img = Image.open(base_image_path).convert("RGB")
@@ -100,7 +108,10 @@ def compose(
     if (img.width, img.height) != (PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT):
         img = _cover_resize(img, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)
 
-    _draw_title(img, title, content_type)
+    title_drawn = False
+    if draw_title_overlay:
+        _draw_title(img, title, content_type)
+        title_drawn = bool(title)
 
     output_path = output_path or (os.path.splitext(base_image_path)[0] + "_final.jpg")
     quality = 90
@@ -121,6 +132,7 @@ def compose(
         "size_bytes": size_bytes,
         "aspect_ok": abs(aspect - ASPECT_RATIO) <= ASPECT_TOLERANCE,
         "size_ok": size_bytes <= max_bytes,
+        "title_drawn": title_drawn,
     }
     if not meta["aspect_ok"]:
         logger.error("Composited image has wrong aspect ratio: %s", aspect)

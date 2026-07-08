@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from config import CONFIG
+from config import AFFILIATE_CONTENT_TYPES, CONFIG
 from db import Database
 from .clients import ApiError, PinterestClient
 
@@ -94,7 +94,7 @@ def post_pin(
         pin_url=pin_url,
     )
     # Mark product used only after a confirmed successful post.
-    if content_type == "affiliate" and subject.get("product_id"):
+    if content_type in AFFILIATE_CONTENT_TYPES and subject.get("product_id"):
         db.mark_product_used(subject["product_id"])
 
     return {
