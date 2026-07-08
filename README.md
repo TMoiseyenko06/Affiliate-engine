@@ -111,6 +111,20 @@ this call fails (missing key, budget cap, bad response), it falls back to a
 simpler static prompt that still avoids plain backgrounds — this never blocks
 a cycle, but produces a less specific scene.
 
+**The scene must illustrate the copy's actual narrative, not a different one
+it invents itself.** The copywriter runs before creative in the pipeline and
+has already committed to a specific angle — e.g. a title like "Why I Stopped
+Digging Through Random Boxes to Find One Missing Lego Piece" for a storage-bin
+product. Earlier, the scene-writer only saw generic product facts (title,
+category, features) and a keyword list, so it would independently invent its
+own unrelated scenario (e.g. folded clothes instead of a toy hunt) — the copy
+and image told two different stories on the same pin. The scene-reasoning
+prompt now leads with the copywriter's actual `title` and `description` and
+is explicitly instructed to depict that exact moment/pain-point, both in the
+system prompt (a hard requirement alongside "product is the hero" and
+"doesn't look like an ad") and the static fallback used when the LLM call
+fails.
+
 Both the scene prompt and the copywriter are also steered toward **native,
 authentic-feeling content rather than ad-like content**: the image prompt
 explicitly asks for a candid, slightly-imperfect "real person's phone photo"

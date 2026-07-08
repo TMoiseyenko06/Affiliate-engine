@@ -37,8 +37,8 @@ AFFILIATE_SCENE_SYSTEM_PROMPT = (
     "or plain colored backgrounds — you always imagine a specific, realistic "
     "scene that demonstrates the product being actively used or clearly doing "
     "its job in context.\n\n"
-    "Two requirements must BOTH be true at once, and neither may compromise the "
-    "other:\n"
+    "Three requirements must ALL be true at once, and none may compromise the "
+    "others:\n"
     "1. THE PRODUCT MUST BE THE UNMISTAKABLE HERO OF THE SHOT. A viewer glancing "
     "at a small thumbnail for one second must instantly understand what the "
     "product is and what it does. It must be large, prominent, well-lit, and in "
@@ -48,7 +48,15 @@ AFFILIATE_SCENE_SYSTEM_PROMPT = (
     "It should look like an authentic, candid photo a real person took while "
     "genuinely using the thing — natural framing, real (but minimal and "
     "purposeful) context around it, phone-camera-like realism rather than "
-    "studio lighting or a glossy commercial finish.\n\n"
+    "studio lighting or a glossy commercial finish.\n"
+    "3. THE SCENE MUST MATCH THE EXACT NARRATIVE IN THE PROVIDED TITLE/"
+    "DESCRIPTION, not a different plausible use-case you invent yourself. The "
+    "copy has already committed to a specific pain point, moment, or angle — "
+    "the image is illustrating THAT story. If the copy is about a parent "
+    "digging through bins for a missing toy, show that search, not an "
+    "unrelated tidy-closet scene; if it's about labeling spice jars while "
+    "cooking, show that, not a pantry restock. Inventing a different scenario "
+    "than the copy — even a plausible one — breaks the pin.\n\n"
     "Reconcile these by keeping the supporting scene SIMPLE: one or two "
     "purposeful context elements (e.g. the specific food being seasoned, the "
     "open fridge it's organizing), not a busy or cluttered tabletop full of "
@@ -84,39 +92,52 @@ ORGANIC_SCENE_SYSTEM_PROMPT = (
     "aesthetic content. You never describe plain, empty, or minimalist studio "
     "compositions — you imagine a specific, richly detailed real-world scene "
     "that captures the feeling of the topic, full of authentic props and "
-    "environment (not floating objects on a plain background). Respond with a "
-    "single JSON object: {\"scene_prompt\": \"...\"}. The scene_prompt must be "
-    "a vivid, concrete image-generation prompt (not meta-commentary) for a "
-    "photorealistic text-to-image model, vertical 2:3 format, no text or "
-    "logos in the image. It must explicitly rule out plain/empty backgrounds "
-    "and negative space — the scene should fill the entire frame."
+    "environment (not floating objects on a plain background). The scene must "
+    "match the exact moment/feeling in the provided title and description, "
+    "not a different plausible scene you invent yourself — the copy has "
+    "already committed to a specific angle and the image illustrates that "
+    "same angle. Respond with a single JSON object: {\"scene_prompt\": "
+    "\"...\"}. The scene_prompt must be a vivid, concrete image-generation "
+    "prompt (not meta-commentary) for a photorealistic text-to-image model, "
+    "vertical 2:3 format, no text or logos in the image. It must explicitly "
+    "rule out plain/empty backgrounds and negative space — the scene should "
+    "fill the entire frame."
 )
 
 
 def _static_fallback_prompt(content_type: str, copy: Dict[str, Any], subject: Dict[str, Any]) -> str:
-    """Used only if the scene-reasoning LLM call fails — degrade, don't crash."""
+    """Used only if the scene-reasoning LLM call fails — degrade, don't crash.
+
+    Leads with the copy's own title (the specific pain-point/narrative angle
+    it already committed to) rather than the generic product title, so even
+    this degraded fallback illustrates the same story the copy tells instead
+    of a generic, possibly-unrelated use-case.
+    """
     keywords = ", ".join(copy.get("keywords", [])[:6])
+    pain_point = copy.get("title", "")
     if content_type == "affiliate":
-        title = subject.get("title", copy.get("title", ""))
+        product_title = subject.get("title", "")
         category = subject.get("category", CONFIG.primary_niche())
         features = ", ".join(subject.get("features", [])[:4])
         return (
-            f"Candid, authentic-looking photo where '{title}' is the large, sharply "
-            f"-focused main subject, actively being used in a real, lived-in "
-            f"{category} setting — like a real person's phone photo, NOT a staged "
-            f"advertisement or product catalog shot, NOT a white or empty "
-            f"background, NOT professional studio lighting. Keep supporting context "
-            f"minimal and purposeful (one or two relevant elements only) so the "
-            f"product stays the unmistakable focal point — avoid busy or cluttered "
-            f"scenes that compete for attention. Features to reflect: {features}. "
-            f"Themes: {keywords}. Vertical 2:3 format, soft natural light."
+            f"Candid, authentic-looking photo illustrating this exact scenario: "
+            f"'{pain_point}'. The product shown, '{product_title}', must be the "
+            f"large, sharply-focused main subject, actively being used in a real, "
+            f"lived-in {category} setting — like a real person's phone photo, NOT "
+            f"a staged advertisement or product catalog shot, NOT a white or "
+            f"empty background, NOT professional studio lighting. Keep supporting "
+            f"context minimal and purposeful (one or two relevant elements only) "
+            f"so the product stays the unmistakable focal point — avoid busy or "
+            f"cluttered scenes that compete for attention. Features to reflect: "
+            f"{features}. Themes: {keywords}. Vertical 2:3 format, soft natural light."
         )
     niche = subject.get("niche") or CONFIG.primary_niche()
     return (
-        f"Photorealistic, richly detailed lifestyle scene capturing the feeling of "
-        f"'{niche}' — full of real, authentic props and environment, NOT a plain "
-        f"or empty background. Full-bleed scene filling the entire frame. "
-        f"Themes: {keywords}. Vertical 2:3 format, soft natural light, no text, no logos."
+        f"Photorealistic, richly detailed lifestyle scene illustrating this exact "
+        f"feeling/moment: '{pain_point}', in the '{niche}' niche — full of real, "
+        f"authentic props and environment, NOT a plain or empty background. "
+        f"Full-bleed scene filling the entire frame. Themes: {keywords}. "
+        f"Vertical 2:3 format, soft natural light, no text, no logos."
     )
 
 
@@ -125,24 +146,37 @@ def _build_scene_prompt_llm(
 ) -> Optional[str]:
     """Ask an LLM to reason about a concrete in-use scene. None on any failure.
 
-    This call never sees the actual product photo — it only has text data
-    (title, category, features). When a real reference photo IS available
-    (see _edit_reference_image), the scene description must stay silent on
-    the product's own visual specifics (shape, exact label style, etc.): if
-    it confidently asserts a plausible-but-wrong detail (e.g. "square black
-    labels" as a stereotype for "spice labels"), that text can win out over
-    the actual reference image during editing, producing a product that
-    doesn't match what's really being sold.
+    The copywriter runs BEFORE creative in the pipeline and has already
+    invented a specific angle/pain-point/narrative (the title and
+    description) — this call must illustrate THAT exact narrative, not
+    independently invent a different one from the raw product facts. Passing
+    only generic product data + a keyword list (the previous behavior) let
+    the scene-writer pick its own unrelated scenario (e.g. copy about a
+    "missing Lego piece" pain point, image showing folded clothes) since it
+    never saw what story the copy actually told.
+
+    This call never sees the actual product photo — it only has text data.
+    When a real reference photo IS available (see _edit_reference_image), the
+    scene description must stay silent on the product's own visual specifics
+    (shape, exact label style, etc.): if it confidently asserts a
+    plausible-but-wrong detail, that text can win out over the actual
+    reference image during editing, producing a product that doesn't match
+    what's really being sold.
     """
     client = OpenRouterClient(db=db)
     if content_type == "affiliate":
         system_prompt = AFFILIATE_SCENE_SYSTEM_PROMPT
         has_reference_photo = bool(subject.get("image_url"))
         user_prompt = (
-            f"Product: {subject.get('title', copy.get('title', ''))}\n"
+            "The Pinterest copy for this pin has ALREADY been written. The "
+            "image must depict the SAME specific moment, pain point, or "
+            "scenario this copy describes — do not invent a different "
+            "use-case or story than what's written below.\n"
+            f"Title: {copy.get('title', '')}\n"
+            f"Description: {copy.get('description', '')}\n\n"
+            f"Product: {subject.get('title', '')}\n"
             f"Category/niche: {subject.get('category', CONFIG.primary_niche())}\n"
-            f"Real product features: {subject.get('features', [])}\n"
-            f"Pinterest copy keywords: {copy.get('keywords', [])}\n\n"
+            f"Real product features: {subject.get('features', [])}\n\n"
         )
         if has_reference_photo:
             user_prompt += (
@@ -157,14 +191,22 @@ def _build_scene_prompt_llm(
                 "product generically (e.g. 'the labeled jar', 'the container') "
                 "without describing what it looks like.\n\n"
             )
-        user_prompt += "Describe the specific real-world in-use scene now."
+        user_prompt += (
+            "Describe the specific real-world in-use scene now, matching the "
+            "exact moment/scenario the title and description above convey."
+        )
     else:
         system_prompt = ORGANIC_SCENE_SYSTEM_PROMPT
         user_prompt = (
+            "The Pinterest copy for this pin has ALREADY been written. The "
+            "image must depict the SAME specific feeling/moment this copy "
+            "conveys — do not invent an unrelated scene.\n"
+            f"Title: {copy.get('title', '')}\n"
+            f"Description: {copy.get('description', '')}\n\n"
             f"Niche: {subject.get('niche', CONFIG.primary_niche())}\n"
-            f"Topic: {subject.get('topic', '')}\n"
-            f"Pinterest copy keywords: {copy.get('keywords', [])}\n\n"
-            "Describe the specific real-world scene now."
+            f"Topic: {subject.get('topic', '')}\n\n"
+            "Describe the specific real-world scene now, matching the exact "
+            "moment/feeling the title and description above convey."
         )
 
     try:
