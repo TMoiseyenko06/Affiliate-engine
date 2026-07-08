@@ -245,9 +245,13 @@ def generate_creative(
          text-to-image generation (Higgsfield), which cannot guarantee the
          product's appearance is accurate.
 
-    When ``mock`` is True and no real photo is available, a locally drawn
-    1000x1500 placeholder is produced instead (for testing the pipeline
-    without a Higgsfield key). A mock image is intended only for ``--dry-run``.
+    When ``mock`` is True, NO image-generation API is called (neither
+    Higgsfield nor the OpenRouter image-editing call) — for testing without
+    any image-API key. If a real reference photo is available it's still
+    downloaded and used directly, unedited (a plain HTTP GET, not generation,
+    and the best available stand-in for testing); otherwise a locally drawn
+    1000x1500 placeholder is produced. A mock image is intended only for
+    ``--dry-run``.
     """
     from db import get_db
 
@@ -255,24 +259,29 @@ def generate_creative(
 
     reference_image_url = subject.get("image_url") if content_type == "affiliate" else None
     if reference_image_url:
-        edited = _edit_reference_image(content_type, copy, subject, reference_image_url, db)
-        if edited is not None:
-            path = _save_image(content_type, edited, output_dir, reference_image_url + "-edited")
-            return path, edited
+        if not mock:
+            edited = _edit_reference_image(content_type, copy, subject, reference_image_url, db)
+            if edited is not None:
+                path = _save_image(content_type, edited, output_dir, reference_image_url + "-edited")
+                return path, edited
 
         image_bytes = _download_reference_image(reference_image_url)
         if image_bytes is not None:
-            logger.info("Using real product photo directly (unedited): %s", reference_image_url)
+            logger.info(
+                "Using real product photo directly%s: %s",
+                " (mock mode: no AI edit)" if mock else " (unedited)",
+                reference_image_url,
+            )
             path = _save_image(content_type, image_bytes, output_dir, reference_image_url)
             return path, image_bytes
-        logger.warning("Reference photo unusable (edit failed and download failed); falling back to generation")
+        logger.warning("Reference photo unusable (download failed); falling back to generation")
 
     prompt = build_image_prompt(content_type, copy, subject, db=db)
     logger.info("Image prompt: %s", prompt)
 
     if mock:
         image_bytes = _mock_image(content_type, copy, subject)
-        logger.warning("MOCK image generated (no Higgsfield call) — dry-run only")
+        logger.warning("MOCK image generated (no image-generation API call) — dry-run only")
     else:
         client = HiggsfieldClient(db=db)
         image_bytes = client.generate_image(prompt, PIN_IMAGE_WIDTH, PIN_IMAGE_HEIGHT)

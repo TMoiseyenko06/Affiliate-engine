@@ -118,8 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mock-images",
         action="store_true",
-        help="Stub image generation with a local placeholder (no Higgsfield key "
-             "needed). Only valid with --dry-run.",
+        help="Skip all image-generation API calls (Higgsfield and OpenRouter "
+             "image editing) — uses a real reference photo directly if one's "
+             "configured, otherwise a local placeholder. No image-API key "
+             "needed. Only valid with --dry-run.",
     )
     parser.add_argument(
         "--output-dir",
