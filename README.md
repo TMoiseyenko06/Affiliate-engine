@@ -189,30 +189,43 @@ OpenRouter's dedicated image-editing models are built specifically for
 "edit this image, preserve the subject," which is a different and more
 appropriate capability for this use case.
 
-Getting that real photo in the first place is the harder problem:
+Getting that real photo in the first place — `amazon_scraper.py` tries, in
+order:
 
-- `amazon_scraper.py` fetches a listing's primary image via plain HTTP. In
-  testing, Amazon's bot wall (`opfcaptcha.amazon.com`) blocked every single
-  request from two independent networks — it never returned the actual
-  listing page, only a captcha challenge. This is disabled by default
-  (`SCRAPE_PRODUCT_IMAGES=false`); only turn it on if you have your own
-  working scraping strategy (e.g. a headless browser with anti-detection
-  measures, or a paid scraping proxy service).
-- The intended long-term source is the official **Product Advertising API
-  (PA-API 5.0)**, which requires an approved Associates account (qualifying
-  recent sales) and AWS-style request signing and returns real image URLs
-  directly. Swap it in by replacing the body of `fetch_product_image_url()`
-  in `amazon_scraper.py` — no caller changes needed, the rest of the pipeline
-  just consumes whatever URL (or `None`) comes back.
-- **For testing without a working scraper**, set `TEST_PRODUCT_IMAGE_URL` to
-  any real image URL — used as the reference photo whenever no scraped image
-  is available, so you can exercise the real pipeline today. It applies the
-  same image to every affiliate product, so it's a testing aid only, not for
-  production.
-- When no real photo is available at all (scraping off, no test URL, product
-  has no image), affiliate creative falls back to the AI scene-reasoning path
-  described above — a plausible but not guaranteed-accurate depiction. This
-  is the accepted tradeoff until a real image source (PA-API) is wired up for
+1. **ScraperAPI** (`SCRAPERAPI_KEY`) — a third-party scraping/proxy service,
+   used because the official PA-API needs an approved Associates account
+   with qualifying recent sales, which isn't available to every seller yet.
+   Has a free tier (1,000 credits) to start. Uses ScraperAPI's dedicated
+   structured Amazon product endpoint, which returns real product JSON
+   (images, title, feature bullets) rather than HTML you have to parse
+   yourself. The exact shape of its `images` field wasn't fully documented
+   when this was built, so parsing tolerates a few plausible shapes and logs
+   the raw response keys if none match — if it ever returns nothing, check
+   the logs for `"no recognizable image field"` and the actual keys will be
+   right there.
+2. **Direct HTTP scrape** (`SCRAPE_PRODUCT_IMAGES=true`) — CONFIRMED
+   NON-VIABLE: Amazon's bot wall (`opfcaptcha.amazon.com`) blocked every
+   single request from two independent networks in testing. Off by default;
+   kept only in case you have your own working workaround (e.g. a headless
+   browser with anti-detection measures).
+3. **Nothing configured** — falls through to `TEST_PRODUCT_IMAGE_URL` (see
+   below) or, failing that, the AI scene-reasoning fallback described above.
+
+The intended long-term source is still the official **Product Advertising
+API (PA-API 5.0)**, which returns real image URLs directly once you have an
+approved Associates account. Swap it in by adding a third strategy to
+`fetch_product_image_url()` in `amazon_scraper.py` — no caller changes
+needed, the rest of the pipeline just consumes whatever URL (or `None`)
+comes back.
+
+- **For testing without any of the above**, set `TEST_PRODUCT_IMAGE_URL` to
+  any real image URL — used as the reference photo whenever no image was
+  fetched some other way. It applies the same image to every affiliate
+  product, so it's a testing aid only, not for production.
+- When no real photo is available at all (nothing configured, or every
+  source fails), affiliate creative falls back to the AI scene-reasoning
+  path described above — a plausible but not guaranteed-accurate depiction.
+  This is the accepted tradeoff until a real image source is wired up for
   every product, not a bug.
 - **To test one specific product repeatedly** instead of whatever the
   ranking step picks, set `TEST_FORCE_PRODUCT_URL` to any Amazon product URL

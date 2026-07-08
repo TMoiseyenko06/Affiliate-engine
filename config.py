@@ -195,6 +195,19 @@ class Config:
     # Product Advertising API (PA-API 5.0), which requires an approved
     # Associates account and AWS-style request signing.
     scrape_product_images: bool = field(default_factory=lambda: _env_bool("SCRAPE_PRODUCT_IMAGES", False))
+    # ScraperAPI (https://scraperapi.com) — third-party proxy/scraping service,
+    # used because PA-API access requires an approved Associates account with
+    # qualifying recent sales, which isn't available yet. Has a free tier
+    # (1,000 credits). When set, this is tried BEFORE the direct-scrape
+    # attempt above (which is confirmed blocked by Amazon's bot wall) via
+    # ScraperAPI's dedicated structured Amazon product endpoint, which
+    # returns real product JSON (images, title, features) rather than HTML
+    # to parse. Swap this out for PA-API later with no caller changes needed.
+    scraperapi_key: Optional[str] = field(default_factory=lambda: _env_str("SCRAPERAPI_KEY"))
+    scraperapi_base_url: str = field(
+        default_factory=lambda: _env_str("SCRAPERAPI_BASE_URL", "https://api.scraperapi.com")
+    )
+    scraperapi_country: str = field(default_factory=lambda: _env_str("SCRAPERAPI_COUNTRY", "us"))
     # Manual testing override: when set, this URL is used as the product
     # reference image whenever no scraped image is available. Lets you
     # exercise the compositor + Higgsfield reference-image flow with a real
