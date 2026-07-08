@@ -101,11 +101,46 @@ All secrets are read from the environment — **never hardcoded**. See
 | `AFFILIATE_DISCLOSURE_TEXT` | no | verbatim disclosure (has a default) |
 | `SCOUT_MODEL` / `COPYWRITER_MODEL` / `CREATIVE_MODEL` / `VERIFIER_MODEL` | no | model routing; **keep the verifier model different** from the copywriter so review is independent |
 | `NICHES`, `TARGET_AFFILIATE_RATIO`, `TARGET_AFFILIATE_IMAGE_ONLY_RATIO`, `TARGET_ORGANIC_RATIO`, `DAILY_POST_COUNT` | no | content strategy — 3-way target mix, defaults to even thirds |
-| `REUSE_LOOKBACK_DAYS` | no | don’t reuse a product/topic within N days |
+| `PRODUCT_REUSE_MODE`, `REUSE_LOOKBACK_DAYS`, `PRODUCT_REUSE_FALLBACK_ENABLED` | no | product reuse policy (see below); default: never repost a product |
 | `OPENROUTER_DAILY_CALL_CAP`, `HIGGSFIELD_DAILY_CALL_CAP` | no | per-day budget caps |
 | `DATABASE_URL` | no | defaults to `sqlite:///affiliate_engine.db` |
 | `ALERT_FILE_PATH`, `DEADMAN_HOURS`, `ALERT_WEBHOOK_URL` | no | alerting |
 | `SCRAPE_PRODUCT_IMAGES` | no | fetch a real product photo to anchor affiliate creative (see below); default `false`, confirmed non-functional |
+
+### Product reuse policy
+
+By default (`PRODUCT_REUSE_MODE=permanent`), a product is **never posted
+twice** — once `poster_agent.py` confirms a successful post, that product is
+excluded from every future scout selection for the life of the database.
+Set `PRODUCT_REUSE_MODE=cooldown` to restore the older behavior instead: a
+product becomes eligible again after `REUSE_LOOKBACK_DAYS`. This only
+governs product reuse — organic topic rotation always uses the cooldown
+window (its own small fixed topic list would exhaust almost immediately
+under permanent exclusion).
+
+**This never costs extra API calls.** The exclusion check
+(`db.all_used_product_ids()` in permanent mode, `db.products_used_within()`
+in cooldown mode) is a single local SQL query, turned into an in-memory set
+and used to filter the candidate list *before* any ranking or image-fetching
+happens (`agents/scout_agent.py::scout_product`). The per-candidate ranking
+LLM call and the ScraperAPI image-fetch call each fire **at most once per
+cycle**, only for the single already-chosen, already-known-fresh winner —
+never iterated across candidates to "find one that isn't a duplicate."
+
+**When a niche's entire product catalog has already been posted**
+(`PRODUCT_REUSE_FALLBACK_ENABLED=true`, the default), the scout falls back
+to re-posting the single least-recently-used product rather than stalling
+the pipeline, and writes an alert (`db.least_recently_used_product_id()`,
+also a single local query) — a nudge to add more products to
+`PRODUCT_SOURCE_URL` or the seed list. Set it to `false` to hard-stop
+instead (the cycle fails/skips, matching the old exhausted-catalog
+behavior). Note that the verifier's separate "was this posted very
+recently" safety-net check (using `REUSE_LOOKBACK_DAYS`, independent of
+`PRODUCT_REUSE_MODE`) still applies even to the fallback pick — with a very
+small catalog under heavy posting cadence, this can cause a cycle to skip
+rather than immediately re-post something you just posted minutes ago; that
+is intentional caution, not a bug, and resolves itself once enough time
+passes or you add more products.
 
 ### Creative scene reasoning
 

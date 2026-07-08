@@ -88,6 +88,42 @@ class DbTestCase(unittest.TestCase):
         self.db.create_post("organic", "declutter", "b", "posted")
         self.assertTrue(self.db.topic_used_within("declutter", 14))
 
+    def test_all_used_product_ids(self):
+        self.db.upsert_product("B01", "Widget")
+        self.db.upsert_product("B02", "Gadget")
+        self.assertEqual(self.db.all_used_product_ids(), [])
+        self.db.mark_product_used("B01")
+        self.assertEqual(self.db.all_used_product_ids(), ["B01"])
+        # Even a product used long ago (outside any cooldown) stays permanently listed.
+        self.db.mark_product_used("B02", when=utcnow() - timedelta(days=365))
+        self.assertEqual(set(self.db.all_used_product_ids()), {"B01", "B02"})
+
+    def test_least_recently_used_product_id(self):
+        self.db.upsert_product("B01", "Widget")
+        self.db.upsert_product("B02", "Gadget")
+        self.db.upsert_product("B03", "Never used")
+        self.db.mark_product_used("B01", when=utcnow() - timedelta(days=1))
+        self.db.mark_product_used("B02", when=utcnow() - timedelta(days=30))
+        self.assertEqual(
+            self.db.least_recently_used_product_id(["B01", "B02", "B03"]), "B02"
+        )
+
+    def test_least_recently_used_product_id_none_used(self):
+        self.db.upsert_product("B01", "Widget")
+        self.assertIsNone(self.db.least_recently_used_product_id(["B01"]))
+
+    def test_least_recently_used_product_id_empty_list(self):
+        self.assertIsNone(self.db.least_recently_used_product_id([]))
+
+    def test_topic_used_ever(self):
+        self.assertFalse(self.db.topic_used_ever("B01"))
+        self.db.create_post("affiliate", "B01", "b", "posted")
+        self.assertTrue(self.db.topic_used_ever("B01"))
+
+    def test_topic_used_ever_ignores_non_posted(self):
+        self.db.create_post("affiliate", "B01", "b", "skipped")
+        self.assertFalse(self.db.topic_used_ever("B01"))
+
     def test_verifier_log(self):
         self.db.log_verifier("attempt1", False, ["missing disclosure"])
         self.db.log_verifier("attempt2", True, [])

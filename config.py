@@ -129,8 +129,23 @@ class Config:
     daily_post_count: int = field(default_factory=lambda: _env_int("DAILY_POST_COUNT", 4))
     # Recent-history window used when computing the actual affiliate/organic ratio.
     ratio_lookback_posts: int = field(default_factory=lambda: _env_int("RATIO_LOOKBACK_POSTS", 20))
-    # Do not reuse the same product/topic within this many days.
+    # "permanent": never re-post the same product once it's been posted
+    # successfully (default — matches "don't post the same item twice").
+    # "cooldown": the old behavior — a product becomes eligible again after
+    # reuse_lookback_days. Only affects PRODUCT reuse (scout/verifier);
+    # organic topic rotation is unaffected (its own small fixed topic list
+    # would exhaust almost immediately under permanent exclusion).
+    product_reuse_mode: str = field(default_factory=lambda: _env_str("PRODUCT_REUSE_MODE", "permanent"))
+    # Cooldown window in days — used when product_reuse_mode="cooldown", and
+    # always used for organic topic rotation regardless of product_reuse_mode.
     reuse_lookback_days: int = field(default_factory=lambda: _env_int("REUSE_LOOKBACK_DAYS", 14))
+    # In permanent mode, if a niche's entire candidate pool has already been
+    # posted, fall back to re-posting the least-recently-used one (and alert)
+    # instead of stalling the pipeline entirely. Set false to hard-stop
+    # instead (cycle is skipped/errors, same as the old behavior).
+    product_reuse_fallback_enabled: bool = field(
+        default_factory=lambda: _env_bool("PRODUCT_REUSE_FALLBACK_ENABLED", True)
+    )
 
     # --- Amazon Associates ---
     amazon_associates_tag: str = field(default_factory=lambda: _env_str("AMAZON_ASSOCIATES_TAG", "example-20"))

@@ -139,9 +139,17 @@ def scout_product(
     db: Optional[Database] = None,
     extra_context: str = "",
 ) -> Dict[str, Any]:
-    """Return a single ranked product candidate not recently used.
+    """Return a single ranked product candidate not already used (per
+    ``CONFIG.product_reuse_mode`` — permanent or a rolling cooldown).
 
-    Raises ``ApiError`` if scouting cannot produce a usable candidate.
+    The exclusion check is always a single local DB query turned into an
+    in-memory set, done BEFORE any ranking or image-fetching calls — no
+    external API (OpenRouter ranking, ScraperAPI image fetch) is ever called
+    per-candidate-until-fresh; both are called at most once, only for the
+    single already-chosen winner.
+
+    Raises ``ApiError`` if scouting cannot produce a usable candidate (only
+    possible in cooldown mode, or permanent mode with the fallback disabled).
     """
     from db import get_db
 
@@ -152,14 +160,14 @@ def scout_product(
         return _forced_test_product(niche, db)
 
     candidates = _fetch_candidates(niche)
-    excluded = set(db.products_used_within(CONFIG.reuse_lookback_days))
+    if CONFIG.product_reuse_mode == "permanent":
+        excluded = set(db.all_used_product_ids())
+    else:
+        excluded = set(db.products_used_within(CONFIG.reuse_lookback_days))
     fresh = [c for c in candidates if c.get("product_id") not in excluded]
 
     if not fresh:
-        raise ApiError(
-            f"No fresh product candidates for niche '{niche}' "
-            f"(all {len(candidates)} excluded within {CONFIG.reuse_lookback_days}d)"
-        )
+        fresh = _handle_exhausted_catalog(niche, candidates, db)
 
     # Ask the cheap model to rank; degrade gracefully to a deterministic pick.
     ranked = _rank_with_llm(niche, fresh, db, extra_context)
@@ -182,6 +190,39 @@ def scout_product(
         source=ranked.get("source_url"),
     )
     return ranked
+
+
+def _handle_exhausted_catalog(
+    niche: str, candidates: List[Dict[str, Any]], db: Database
+) -> List[Dict[str, Any]]:
+    """Every candidate for this niche has already been used.
+
+    In cooldown mode, or permanent mode with the fallback disabled, this is a
+    hard stop (raises). In permanent mode with the fallback enabled (the
+    default), fall back to re-posting the single least-recently-used
+    candidate rather than stalling the pipeline entirely, and raise an alert
+    so it's obvious the product catalog needs topping up. Still just one
+    local DB query — no extra API calls.
+    """
+    if CONFIG.product_reuse_mode == "permanent" and CONFIG.product_reuse_fallback_enabled:
+        candidate_ids = [c["product_id"] for c in candidates if c.get("product_id")]
+        lru_id = db.least_recently_used_product_id(candidate_ids)
+        if lru_id:
+            from alerting import alert
+
+            alert(
+                f"Product catalog exhausted for niche '{niche}': all {len(candidates)} "
+                f"candidates have already been posted (PRODUCT_REUSE_MODE=permanent). "
+                f"Falling back to re-posting the least-recently-used product ({lru_id}). "
+                f"Add more products to PRODUCT_SOURCE_URL or the seed list.",
+                db,
+            )
+            return [c for c in candidates if c.get("product_id") == lru_id]
+
+    raise ApiError(
+        f"No fresh product candidates for niche '{niche}' (all {len(candidates)} "
+        f"excluded; mode={CONFIG.product_reuse_mode})"
+    )
 
 
 def _forced_test_product(niche: str, db: Database) -> Dict[str, Any]:

@@ -346,6 +346,46 @@ class Database:
             )
             return [r["product_id"] for r in cur.fetchall()]
 
+    def all_used_product_ids(self) -> List[str]:
+        """Return every product_id ever marked used (for PRODUCT_REUSE_MODE=permanent).
+
+        A single fast local query — no external API calls involved, so
+        filtering candidates against this never costs API credits.
+        """
+        with self._cursor() as cur:
+            cur.execute("SELECT product_id FROM products WHERE last_used_at IS NOT NULL")
+            return [r["product_id"] for r in cur.fetchall()]
+
+    def least_recently_used_product_id(self, candidate_ids: List[str]) -> Optional[str]:
+        """Among ``candidate_ids``, return whichever has the oldest
+        ``last_used_at`` (fallback when a niche's whole catalog has been used
+        in permanent mode, so the pipeline degrades instead of stalling).
+        None if none of the candidates have ever been used."""
+        if not candidate_ids:
+            return None
+        placeholders = ",".join("?" for _ in candidate_ids)
+        with self._cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT product_id FROM products
+                WHERE product_id IN ({placeholders}) AND last_used_at IS NOT NULL
+                ORDER BY last_used_at ASC LIMIT 1
+                """,
+                candidate_ids,
+            )
+            row = cur.fetchone()
+            return row["product_id"] if row else None
+
+    def topic_used_ever(self, topic: str) -> bool:
+        """Like ``topic_used_within`` but with no time floor — has this
+        product/topic EVER been posted successfully (for permanent mode)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM posts WHERE product_id_or_topic = ? AND status = 'posted' LIMIT 1",
+                (topic,),
+            )
+            return cur.fetchone() is not None
+
     # -- verifier log ------------------------------------------------------
     def log_verifier(self, post_attempt_id: str, passed: bool, failures: Iterable[str]) -> int:
         with self._cursor() as cur:
