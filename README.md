@@ -31,11 +31,12 @@ run_cycle.py                    CLI entrypoint (cron)
     ├── agents/creative_agent.py    image-gen prompt + Higgsfield (1000x1500, 2:3)
     ├── compositor.py               PURE CODE (Pillow): overlay title, validate aspect/size
     ├── agents/verifier_agent.py    HARD GATE: deterministic checks + independent LLM review
-    └── agents/poster_agent.py      PURE CODE: Pinterest API v5 create-pin
+    └── agents/poster_agent.py      PURE CODE: posts via Zernio (Pinterest scheduler)
 db.py            SQLite persistence (posts, performance, products, verifier_log, alerts, …)
 config.py        all tunables + secrets (from env vars)
 alerting.py      dead-man's-switch, skip, and budget-cap alerts
 analytics_pull.py  separate periodic pull from Pinterest Analytics -> performance table
+                 (still uses the direct Pinterest API v5, not Zernio — see below)
 ```
 
 ### Flow of one cycle
@@ -64,8 +65,9 @@ analytics_pull.py  separate periodic pull from Pinterest Analytics -> performanc
 7. **On FAIL** – the content-generation steps are retried **exactly once** with
    the failure reasons appended to context. If it fails again, the cycle is
    **skipped**, logged, and an **alert** is written.
-8. **Poster** – on pass (and not `--dry-run`), formats a Pinterest API v5
-   create-pin request, posts, and records the pin ID/URL.
+8. **Poster** – on pass (and not `--dry-run`), posts via
+   [Zernio](https://zernio.com) — a third-party scheduler, **not** Pinterest's
+   own API v5 — and records the pin ID/URL. See "Posting via Zernio" below.
 
 Every LLM call returns structured JSON (markdown fences stripped, parsed with
 error handling). Every external API call is wrapped in try/except and logged —
@@ -95,8 +97,10 @@ All secrets are read from the environment — **never hardcoded**. See
 |---|---|---|
 | `OPENROUTER_API_KEY` | yes | scout, copywriter, verifier LLM calls |
 | `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` | yes | image generation (both required — auth is a key:secret pair) |
-| `PINTEREST_ACCESS_TOKEN` | yes | posting + analytics (Pinterest API v5) |
+| `ZERNIO_API_KEY` | yes | posting (via Zernio, see below) |
+| `ZERNIO_PINTEREST_ACCOUNT_ID` | yes | the Zernio-side connected Pinterest account to post as |
 | `PINTEREST_BOARD_ID` | yes | board to post to |
+| `PINTEREST_ACCESS_TOKEN` | no | analytics only (`analytics_pull.py`) — **not** used for posting |
 | `AMAZON_ASSOCIATES_TAG` | yes | Associates tag appended to every affiliate link |
 | `AFFILIATE_DISCLOSURE_TEXT` | no | verbatim disclosure (has a default) |
 | `SCOUT_MODEL` / `COPYWRITER_MODEL` / `CREATIVE_MODEL` / `VERIFIER_MODEL` | no | model routing; **keep the verifier model different** from the copywriter so review is independent |
@@ -141,6 +145,37 @@ small catalog under heavy posting cadence, this can cause a cycle to skip
 rather than immediately re-post something you just posted minutes ago; that
 is intentional caution, not a bug, and resolves itself once enough time
 passes or you add more products.
+
+### Posting via Zernio
+
+Posting does **not** call Pinterest's API directly — it goes through
+[Zernio](https://zernio.com), a third-party social scheduler. Set up the
+Pinterest connection once via Zernio's own OAuth "Connecting Accounts" flow
+(outside this pipeline), then copy the resulting account ID into
+`ZERNIO_PINTEREST_ACCOUNT_ID`.
+
+Per Zernio's docs, posting is a two-step flow (`agents/clients.py::ZernioClient`):
+1. **Upload** the composited image via `POST /media/presign` (returns a
+   presigned upload URL + the eventual public URL), then `PUT` the raw image
+   bytes to that upload URL. Zernio requires a publicly reachable media URL —
+   unlike Pinterest's own API, it does not accept inline base64 image bytes.
+2. **Create the post** via `POST /posts`, referencing the public URL from
+   step 1, with `platforms: [{ platform: "pinterest", accountId, ... }]` and
+   `publishNow: true`.
+
+Zernio's documentation doesn't fully specify the response schema for
+immediate-publish posts, so `poster_agent.py` treats the per-platform
+`status` field tolerantly: an explicit `failed`/`error`/`rejected` status
+raises and the cycle records a failed post; a recognized success status
+(`success`/`posted`/`published`/`completed`/`live`) is recorded as posted;
+anything else is logged as an unrecognized-but-accepted status rather than
+treated as fatal, since the HTTP call itself already succeeded (2xx).
+Create-post is retried once on error (reusing the same uploaded image URL,
+no need to re-upload); the media upload itself is not retried.
+
+Note: `PINTEREST_ACCESS_TOKEN`/`PINTEREST_BASE_URL` (direct Pinterest API v5)
+are unrelated to posting now — they're only used by `analytics_pull.py` to
+pull pin performance stats, which Zernio does not currently replace.
 
 ### Creative scene reasoning
 

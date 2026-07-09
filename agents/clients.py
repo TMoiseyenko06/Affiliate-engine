@@ -509,3 +509,183 @@ class PinterestClient:
             raise ApiError(f"Pinterest analytics failed for {pin_id}: {exc}") from exc
         except ValueError as exc:
             raise ApiError(f"Pinterest analytics non-JSON response: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Zernio (third-party scheduler — the active posting path, replacing direct
+# Pinterest API v5 calls)
+# ---------------------------------------------------------------------------
+# Statuses treated as a confirmed successful publish on the Pinterest platform
+# entry. Zernio's docs don't fully detail the immediate-publish response
+# shape, so this is a tolerant, non-exhaustive set — anything not in either
+# set below is treated as "accepted, status unclear" (logged, not fatal).
+_ZERNIO_SUCCESS_STATUSES = {"success", "posted", "published", "completed", "live"}
+_ZERNIO_FAILURE_STATUSES = {"failed", "error", "rejected"}
+
+
+class ZernioClient:
+    """Client for Zernio (https://zernio.com), used to post to Pinterest.
+
+    Contract per https://docs.zernio.com:
+        POST /v1/media/presign          -> {uploadUrl, publicUrl, key, expiresIn}
+        PUT  {uploadUrl}                -> upload raw bytes (no auth needed)
+        POST /v1/posts                  -> create/publish the post
+
+    Unlike Pinterest's own v5 API (base64 image bytes inline), Zernio requires
+    a publicly reachable media URL — hence the presign+upload step before
+    every post.
+    """
+
+    def __init__(self):
+        self.api_key = CONFIG.zernio_api_key
+        self.base_url = CONFIG.zernio_base_url.rstrip("/")
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def upload_media(
+        self, image_bytes: bytes, filename: str = "pin.jpg", content_type: str = "image/jpeg"
+    ) -> str:
+        """Upload image bytes via Zernio's presigned-URL flow; return the
+        public URL to reference in a post's ``mediaItems``. Raises
+        ``ApiError`` on failure."""
+        if not self.api_key:
+            raise ApiError("ZERNIO_API_KEY is not set")
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/media/presign",
+                headers=self._headers(),
+                json={"filename": filename, "contentType": content_type},
+                timeout=CONFIG.http_timeout_seconds,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.HTTPError as exc:
+            body = (exc.response.text or "")[:500] if exc.response is not None else ""
+            raise ApiError(f"Zernio presign HTTP error: {exc} :: {body}") from exc
+        except (requests.RequestException, ValueError) as exc:
+            raise ApiError(f"Zernio presign request failed: {exc}") from exc
+
+        upload_url = data.get("uploadUrl")
+        public_url = data.get("publicUrl")
+        if not upload_url or not public_url:
+            raise ApiError(f"Zernio presign response missing uploadUrl/publicUrl: {list(data.keys())}")
+
+        try:
+            put_resp = requests.put(
+                upload_url,
+                data=image_bytes,
+                headers={"Content-Type": content_type},
+                timeout=CONFIG.http_timeout_seconds,
+            )
+            put_resp.raise_for_status()
+        except requests.HTTPError as exc:
+            body = (exc.response.text or "")[:300] if exc.response is not None else ""
+            raise ApiError(f"Zernio media upload HTTP error: {exc} :: {body}") from exc
+        except requests.RequestException as exc:
+            raise ApiError(f"Zernio media upload failed: {exc}") from exc
+
+        return public_url
+
+    def create_pinterest_post(
+        self,
+        title: str,
+        description: str,
+        image_public_url: str,
+        board_id: str,
+        link: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create (and immediately publish) a Pinterest pin via Zernio.
+
+        Returns the parsed response dict. Raises ``ApiError`` on an HTTP
+        failure OR on a 2xx response whose Pinterest platform entry reports
+        an explicit failure status (Zernio's docs cite a 21.1% Pinterest
+        failure rate on their platform, so a 2xx alone doesn't guarantee
+        Pinterest actually accepted the pin).
+        """
+        if not self.api_key:
+            raise ApiError("ZERNIO_API_KEY is not set")
+        if not CONFIG.zernio_pinterest_account_id:
+            raise ApiError("ZERNIO_PINTEREST_ACCOUNT_ID is not set")
+
+        platform_specific_data: Dict[str, Any] = {"title": title, "boardId": board_id}
+        if link:
+            platform_specific_data["link"] = link
+
+        payload = {
+            "content": description,
+            "mediaItems": [{"type": "image", "url": image_public_url}],
+            "platforms": [
+                {
+                    "platform": "pinterest",
+                    "accountId": CONFIG.zernio_pinterest_account_id,
+                    "platformSpecificData": platform_specific_data,
+                }
+            ],
+            "publishNow": True,
+        }
+        try:
+            resp = requests.post(
+                f"{self.base_url}/posts",
+                headers=self._headers(),
+                json=payload,
+                timeout=CONFIG.http_timeout_seconds,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.HTTPError as exc:
+            body = (exc.response.text or "")[:500] if exc.response is not None else ""
+            raise ApiError(f"Zernio create-post HTTP error: {exc} :: {body}") from exc
+        except (requests.RequestException, ValueError) as exc:
+            raise ApiError(f"Zernio create-post request failed: {exc}") from exc
+
+        platform_entry = self._pinterest_platform_entry(data)
+        status = str((platform_entry or {}).get("status", "")).lower()
+        if status in _ZERNIO_FAILURE_STATUSES:
+            reason = (platform_entry or {}).get("error") or (platform_entry or {}).get("failureReason") or status
+            raise ApiError(f"Zernio reported the Pinterest post failed: {reason}")
+        if status and status not in _ZERNIO_SUCCESS_STATUSES:
+            logger.warning(
+                "Zernio Pinterest post has an unrecognized status %r — treating as "
+                "accepted since the API call itself succeeded (2xx). Response keys: %s",
+                status, list(data.keys()),
+            )
+
+        return data
+
+    @staticmethod
+    def _pinterest_platform_entry(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        platforms = (data.get("post") or {}).get("platforms")
+        if not isinstance(platforms, list):
+            return None
+        for entry in platforms:
+            if isinstance(entry, dict) and entry.get("platform") == "pinterest":
+                return entry
+        return platforms[0] if platforms and isinstance(platforms[0], dict) else None
+
+    @staticmethod
+    def extract_post_id(data: Dict[str, Any]) -> Optional[str]:
+        post = data.get("post") or {}
+        return post.get("_id") or data.get("_id")
+
+    @staticmethod
+    def extract_pin_url(data: Dict[str, Any]) -> Optional[str]:
+        """Best-effort pin URL extraction. Zernio's docs mention immediate
+        posts include ``platformPostUrl`` but don't fully specify where —
+        this tries several plausible locations, tolerant of the ambiguity."""
+        post = data.get("post") or {}
+        for candidate in (
+            post.get("platformPostUrl"),
+            data.get("platformPostUrl"),
+        ):
+            if candidate:
+                return candidate
+        entry = ZernioClient._pinterest_platform_entry(data) or {}
+        for key in ("postUrl", "url", "permalink", "platformPostUrl"):
+            if entry.get(key):
+                return entry[key]
+        return None

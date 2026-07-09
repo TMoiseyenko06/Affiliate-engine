@@ -251,12 +251,27 @@ class Config:
         default_factory=lambda: _env_str("TEST_FORCE_PRODUCT_TITLE")
     )
 
-    # --- Pinterest API v5 ---
+    # --- Pinterest board (still needed regardless of how posting happens) ---
+    pinterest_board_id: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_BOARD_ID"))
+
+    # --- Pinterest API v5 (direct) --- kept only for analytics_pull.py; NOT
+    # used for posting — see Zernio below, the active posting path.
     pinterest_access_token: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_ACCESS_TOKEN"))
     pinterest_base_url: str = field(
         default_factory=lambda: _env_str("PINTEREST_BASE_URL", "https://api.pinterest.com/v5")
     )
-    pinterest_board_id: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_BOARD_ID"))
+
+    # --- Zernio (https://zernio.com) — third-party scheduler actually used to
+    # post to Pinterest, in place of Pinterest's own API v5. Per
+    # https://docs.zernio.com: media must be uploaded first (presigned URL
+    # flow) to get a public URL, then referenced in the create-post call.
+    zernio_api_key: Optional[str] = field(default_factory=lambda: _env_str("ZERNIO_API_KEY"))
+    zernio_base_url: str = field(default_factory=lambda: _env_str("ZERNIO_BASE_URL", "https://zernio.com/api/v1"))
+    # The Zernio-side connected-account ID for the Pinterest account (set up
+    # once via Zernio's OAuth "Connecting Accounts" flow, not by this pipeline).
+    zernio_pinterest_account_id: Optional[str] = field(
+        default_factory=lambda: _env_str("ZERNIO_PINTEREST_ACCOUNT_ID")
+    )
 
     # --- Data source for Amazon product candidates (scout) ---
     product_source_url: Optional[str] = field(default_factory=lambda: _env_str("PRODUCT_SOURCE_URL"))
@@ -306,8 +321,10 @@ class Config:
             missing.append("HIGGSFIELD_API_KEY")
         if not self.higgsfield_api_secret:
             missing.append("HIGGSFIELD_API_SECRET")
-        if not self.pinterest_access_token:
-            missing.append("PINTEREST_ACCESS_TOKEN")
+        if not self.zernio_api_key:
+            missing.append("ZERNIO_API_KEY")
+        if not self.zernio_pinterest_account_id:
+            missing.append("ZERNIO_PINTEREST_ACCOUNT_ID")
         if not self.pinterest_board_id:
             missing.append("PINTEREST_BOARD_ID")
         if not self.amazon_associates_tag:

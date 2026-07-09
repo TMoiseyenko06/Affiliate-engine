@@ -1,8 +1,14 @@
 """Poster agent — pure code, no LLM.
 
-Formats verified content into a Pinterest API v5 create-pin request, posts it,
-captures the response (pin ID, URL), and writes it to the DB. On API error it
-logs the full error and does NOT silently retry more than once.
+Formats verified content into a Pinterest post and publishes it via Zernio
+(https://zernio.com), a third-party scheduler — NOT Pinterest's own API v5
+directly. Captures the response (post ID, URL) and writes it to the DB. On
+API error it logs the full error and does NOT silently retry more than once.
+
+Two-step flow (Zernio requires a public image URL, unlike Pinterest's own API
+which accepts inline base64 bytes): upload the image once to get a public
+URL, then attempt create-post up to twice reusing that same URL (Zernio's
+temp upload storage is valid for the retry window; no need to re-upload).
 """
 
 from __future__ import annotations
@@ -12,17 +18,9 @@ from typing import Any, Dict, Optional
 
 from config import AFFILIATE_CONTENT_TYPES, CONFIG
 from db import Database
-from .clients import ApiError, PinterestClient
+from .clients import ApiError, ZernioClient
 
 logger = logging.getLogger("affiliate_engine.poster")
-
-
-def _pin_url(response: Dict[str, Any]) -> Optional[str]:
-    pin_id = response.get("id")
-    # v5 responses don't always include a canonical URL; construct one.
-    if pin_id:
-        return f"https://www.pinterest.com/pin/{pin_id}/"
-    return None
 
 
 def post_pin(
@@ -33,10 +31,10 @@ def post_pin(
     db: Optional[Database] = None,
     board_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Create the pin and persist the result.
+    """Upload the image and create the pin via Zernio; persist the result.
 
     Returns {"posted": bool, "pin_id": ..., "pin_url": ..., "post_id": ...,
-    "error": ...}. Retries at most once on API error, then gives up.
+    "error": ...}. Retries create-post at most once on API error, then gives up.
     """
     from db import get_db
 
@@ -47,7 +45,7 @@ def post_pin(
     if not board_id:
         return {"posted": False, "error": "No board_id configured", "post_id": None}
 
-    client = PinterestClient()
+    client = ZernioClient()
     title = copy.get("title", "")
     description = copy.get("description", "")
     link = copy.get("link") or copy.get("link_or_null")
@@ -55,21 +53,33 @@ def post_pin(
     last_error: Optional[str] = None
     response: Optional[Dict[str, Any]] = None
 
-    # At most two attempts total (initial + one retry).
+    try:
+        image_public_url = client.upload_media(image_bytes)
+    except ApiError as exc:
+        logger.error("Zernio media upload failed: %s", exc)
+        post_id = db.create_post(
+            content_type=content_type,
+            product_id_or_topic=product_id_or_topic,
+            board_id=board_id,
+            status="failed",
+        )
+        return {"posted": False, "error": str(exc), "post_id": post_id}
+
+    # At most two create-post attempts total (initial + one retry).
     for attempt in range(2):
         try:
-            response = client.create_pin(
-                board_id=board_id,
+            response = client.create_pinterest_post(
                 title=title,
                 description=description,
-                image_bytes=image_bytes,
+                image_public_url=image_public_url,
+                board_id=board_id,
                 link=link,
             )
             last_error = None
             break
         except ApiError as exc:
             last_error = str(exc)
-            logger.error("Pinterest post attempt %d failed: %s", attempt + 1, exc)
+            logger.error("Zernio Pinterest post attempt %d failed: %s", attempt + 1, exc)
             if attempt == 1:
                 break  # do not retry more than once
 
@@ -83,8 +93,8 @@ def post_pin(
         )
         return {"posted": False, "error": last_error, "post_id": post_id}
 
-    pin_id = response.get("id")
-    pin_url = _pin_url(response)
+    pin_id = ZernioClient.extract_post_id(response)
+    pin_url = ZernioClient.extract_pin_url(response)
     post_id = db.create_post(
         content_type=content_type,
         product_id_or_topic=product_id_or_topic,
