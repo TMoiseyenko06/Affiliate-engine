@@ -35,8 +35,7 @@ run_cycle.py                    CLI entrypoint (cron)
 db.py            SQLite persistence (posts, performance, products, verifier_log, alerts, …)
 config.py        all tunables + secrets (from env vars)
 alerting.py      dead-man's-switch, skip, and budget-cap alerts
-analytics_pull.py  separate periodic pull from Pinterest Analytics -> performance table
-                 (still uses the direct Pinterest API v5, not Zernio — see below)
+analytics_pull.py  separate periodic pull from Zernio Analytics -> performance table
 ```
 
 ### Flow of one cycle
@@ -97,10 +96,9 @@ All secrets are read from the environment — **never hardcoded**. See
 |---|---|---|
 | `OPENROUTER_API_KEY` | yes | scout, copywriter, verifier LLM calls |
 | `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` | yes | image generation (both required — auth is a key:secret pair) |
-| `ZERNIO_API_KEY` | yes | posting (via Zernio, see below) |
+| `ZERNIO_API_KEY` | yes | posting + analytics (via Zernio, see below) |
 | `ZERNIO_PINTEREST_ACCOUNT_ID` | yes | the Zernio-side connected Pinterest account to post as |
 | `PINTEREST_BOARD_ID` | yes | board to post to |
-| `PINTEREST_ACCESS_TOKEN` | no | analytics only (`analytics_pull.py`) — **not** used for posting |
 | `AMAZON_ASSOCIATES_TAG` | yes | Associates tag appended to every affiliate link |
 | `AFFILIATE_DISCLOSURE_TEXT` | no | verbatim disclosure (has a default) |
 | `SCOUT_MODEL` / `COPYWRITER_MODEL` / `CREATIVE_MODEL` / `VERIFIER_MODEL` | no | model routing; **keep the verifier model different** from the copywriter so review is independent |
@@ -148,10 +146,10 @@ passes or you add more products.
 
 ### Posting via Zernio
 
-Posting does **not** call Pinterest's API directly — it goes through
-[Zernio](https://zernio.com), a third-party social scheduler. Set up the
-Pinterest connection once via Zernio's own OAuth "Connecting Accounts" flow
-(outside this pipeline), then copy the resulting account ID into
+This pipeline never calls Pinterest's own API — posting and analytics both go
+through [Zernio](https://zernio.com), a third-party social scheduler. Set up
+the Pinterest connection once via Zernio's own OAuth "Connecting Accounts"
+flow (outside this pipeline), then copy the resulting account ID into
 `ZERNIO_PINTEREST_ACCOUNT_ID`.
 
 Per Zernio's docs, posting is a two-step flow (`agents/clients.py::ZernioClient`):
@@ -173,9 +171,15 @@ treated as fatal, since the HTTP call itself already succeeded (2xx).
 Create-post is retried once on error (reusing the same uploaded image URL,
 no need to re-upload); the media upload itself is not retried.
 
-Note: `PINTEREST_ACCESS_TOKEN`/`PINTEREST_BASE_URL` (direct Pinterest API v5)
-are unrelated to posting now — they're only used by `analytics_pull.py` to
-pull pin performance stats, which Zernio does not currently replace.
+**Analytics** also goes through Zernio (`analytics_pull.py`, run separately
+from the posting cycle): a single `GET /analytics?platform=pinterest&fromDate=&toDate=`
+call per run covers every post in the lookback window
+(`ANALYTICS_LOOKBACK_DAYS`, default 30) — not one request per pin. Results
+are matched back to local posts by pin ID and written to the `performance`
+table. Zernio's docs don't fully specify per-post metric field names beyond
+confirming impressions/saves/clicks are available, so extraction
+(`analytics_pull.py::_extract_metric`) tolerates a few plausible key
+variants rather than assuming one exact shape.
 
 ### Creative scene reasoning
 

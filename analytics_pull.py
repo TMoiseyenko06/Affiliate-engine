@@ -1,57 +1,85 @@
-"""Separate periodic pull from Pinterest Analytics API into the ``performance``
+"""Separate periodic pull from Zernio's Analytics API into the ``performance``
 table. Intended to run on its own cron schedule (e.g. once daily), independent
 of the posting cycle.
+
+Pinterest's own API is never called — this pipeline posts and reads analytics
+entirely through Zernio (https://zernio.com). One request covers the whole
+lookback window (``GET /v1/analytics?platform=pinterest&fromDate=&toDate=``),
+not one request per pin.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from datetime import timedelta
+from typing import Any, Dict, List, Optional
 
-from agents.clients import ApiError, PinterestClient
-from db import Database, get_db
+from agents.clients import ApiError, ZernioClient
+from config import CONFIG
+from db import Database, get_db, utcnow
 
 logger = logging.getLogger("affiliate_engine.analytics")
 
 
-def _extract_metric(analytics: Dict[str, Any], key: str) -> int:
-    """Best-effort extraction of a metric total from a v5 analytics response.
+def _extract_metric(entry: Dict[str, Any], *keys: str) -> int:
+    """Best-effort extraction of a metric from a single analytics-post entry.
 
-    The v5 shape nests metrics under ``all.daily_metrics`` or ``all.summary_metrics``;
-    we sum whatever daily values we find, tolerating shape drift.
+    Zernio's docs confirm impressions/saves/clicks are available but don't
+    fully specify field names, so this checks a nested ``metrics`` dict (if
+    present) and the entry itself, tolerating either casing/naming.
     """
-    try:
-        all_bucket = analytics.get("all", analytics)
-        summary = all_bucket.get("summary_metrics") or {}
-        if key in summary and summary[key] is not None:
-            return int(summary[key])
-        total = 0
-        for day in all_bucket.get("daily_metrics", []):
-            metrics = day.get("metrics", {})
-            if metrics.get(key) is not None:
-                total += int(metrics[key])
-        return total
-    except (AttributeError, TypeError, ValueError):
+    metrics = entry.get("metrics") if isinstance(entry.get("metrics"), dict) else entry
+    for key in keys:
+        for candidate_key in (key, key.lower(), key.upper()):
+            value = metrics.get(candidate_key)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+    return 0
+
+
+def _post_identifier(entry: Dict[str, Any]) -> Optional[str]:
+    for key in ("postId", "post_id", "_id", "id"):
+        value = entry.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def pull_all(db: Database = None, lookback_days: Optional[int] = None) -> int:
+    """Pull analytics for every post with a pin_id, via a single Zernio call
+    covering the whole lookback window. Returns the count of posts updated.
+    """
+    db = db or get_db()
+    lookback_days = lookback_days if lookback_days is not None else CONFIG.analytics_lookback_days
+    posts = db.posts_with_pins()
+    if not posts:
         return 0
 
+    now = utcnow()
+    from_date = (now - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    to_date = now.strftime("%Y-%m-%d")
 
-def pull_all(db: Database = None) -> int:
-    """Pull analytics for every post that has a pin_id. Returns the count pulled."""
-    db = db or get_db()
-    client = PinterestClient()
-    posts = db.posts_with_pins()
+    client = ZernioClient()
+    try:
+        analytics = client.get_analytics(from_date=from_date, to_date=to_date)
+    except ApiError as exc:
+        logger.error("Zernio analytics pull failed for %s..%s: %s", from_date, to_date, exc)
+        return 0
+
+    entries: List[Dict[str, Any]] = analytics.get("posts") or []
+    by_pin_id = {pid: entry for entry in entries if isinstance(entry, dict) and (pid := _post_identifier(entry))}
+
     pulled = 0
     for post in posts:
         pin_id = post.get("pin_id")
-        if not pin_id:
+        entry = by_pin_id.get(pin_id) if pin_id else None
+        if entry is None:
             continue
-        try:
-            analytics = client.get_pin_analytics(pin_id)
-        except ApiError as exc:
-            logger.error("Analytics pull failed for pin %s: %s", pin_id, exc)
-            continue
-        saves = _extract_metric(analytics, "SAVE")
-        clicks = _extract_metric(analytics, "PIN_CLICK")
+        saves = _extract_metric(entry, "saves", "save")
+        clicks = _extract_metric(entry, "clicks", "click", "pinClick")
         try:
             db.record_performance(post["id"], saves, clicks)
             pulled += 1

@@ -5,7 +5,8 @@ Contains:
 - ``BudgetError`` / ``check_and_consume_budget`` : per-day API call caps.
 - ``OpenRouterClient`` : chat completions (scout / copywriter / verifier).
 - ``HiggsfieldClient`` : image generation.
-- ``PinterestClient`` : Pinterest API v5 pin creation + analytics.
+- ``ZernioClient`` : Pinterest posting + analytics via the Zernio scheduler
+  (this pipeline does not call Pinterest's own API directly at all).
 
 Every network call is wrapped in try/except and raises a typed ``ApiError`` so
 callers can log and degrade gracefully rather than crashing the whole cycle.
@@ -431,89 +432,8 @@ def _aspect_ratio_string(width: int, height: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pinterest API v5
-# ---------------------------------------------------------------------------
-class PinterestClient:
-    def __init__(self):
-        self.access_token = CONFIG.pinterest_access_token
-        self.base_url = CONFIG.pinterest_base_url.rstrip("/")
-
-    def _headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
-
-    def create_pin(
-        self,
-        board_id: str,
-        title: str,
-        description: str,
-        image_bytes: bytes,
-        link: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Create a pin via the v5 create-pin endpoint (base64 image source).
-
-        Returns the parsed response dict (includes ``id`` and, typically,
-        a pin URL). Raises ``ApiError`` on failure.
-        """
-        if not self.access_token:
-            raise ApiError("PINTEREST_ACCESS_TOKEN is not set")
-
-        media_source = {
-            "source_type": "image_base64",
-            "content_type": "image/jpeg",
-            "data": base64.b64encode(image_bytes).decode("ascii"),
-        }
-        payload: Dict[str, Any] = {
-            "board_id": board_id,
-            "title": title,
-            "description": description,
-            "media_source": media_source,
-        }
-        if link:
-            payload["link"] = link
-
-        try:
-            resp = requests.post(
-                f"{self.base_url}/pins",
-                headers=self._headers(),
-                json=payload,
-                timeout=CONFIG.http_timeout_seconds,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as exc:
-            body = getattr(exc.response, "text", "") if hasattr(exc, "response") and exc.response else ""
-            raise ApiError(f"Pinterest create_pin failed: {exc} :: {body}") from exc
-        except ValueError as exc:
-            raise ApiError(f"Pinterest returned non-JSON response: {exc}") from exc
-
-    def get_pin_analytics(self, pin_id: str, metric_types: str = "SAVE,PIN_CLICK") -> Dict[str, Any]:
-        """Fetch analytics for a single pin. Raises ``ApiError`` on failure."""
-        if not self.access_token:
-            raise ApiError("PINTEREST_ACCESS_TOKEN is not set")
-        params = {
-            "metric_types": metric_types,
-        }
-        try:
-            resp = requests.get(
-                f"{self.base_url}/pins/{pin_id}/analytics",
-                headers=self._headers(),
-                params=params,
-                timeout=CONFIG.http_timeout_seconds,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as exc:
-            raise ApiError(f"Pinterest analytics failed for {pin_id}: {exc}") from exc
-        except ValueError as exc:
-            raise ApiError(f"Pinterest analytics non-JSON response: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
-# Zernio (third-party scheduler — the active posting path, replacing direct
-# Pinterest API v5 calls)
+# Zernio (third-party scheduler — the only Pinterest integration this
+# pipeline uses; it never calls Pinterest's own API directly)
 # ---------------------------------------------------------------------------
 # Statuses treated as a confirmed successful publish on the Pinterest platform
 # entry. Zernio's docs don't fully detail the immediate-publish response
@@ -666,6 +586,35 @@ class ZernioClient:
             if isinstance(entry, dict) and entry.get("platform") == "pinterest":
                 return entry
         return platforms[0] if platforms and isinstance(platforms[0], dict) else None
+
+    def get_analytics(self, from_date: str, to_date: str, platform: str = "pinterest") -> Dict[str, Any]:
+        """Fetch analytics for all posts on ``platform`` within a date range.
+
+        A single call covers every post in the range — used instead of one
+        request per pin. Per https://docs.zernio.com/analytics/get-analytics
+        (``GET /v1/analytics?platform=&fromDate=&toDate=``), returns a dict
+        with a ``posts`` list; exact per-post metric field names beyond
+        "impressions/saves/clicks are available" aren't fully documented, so
+        callers should extract metrics tolerantly (see
+        ``analytics_pull.py::_extract_metric``). Raises ``ApiError`` on
+        failure.
+        """
+        if not self.api_key:
+            raise ApiError("ZERNIO_API_KEY is not set")
+        try:
+            resp = requests.get(
+                f"{self.base_url}/analytics",
+                headers=self._headers(),
+                params={"platform": platform, "fromDate": from_date, "toDate": to_date},
+                timeout=CONFIG.http_timeout_seconds,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.HTTPError as exc:
+            body = (exc.response.text or "")[:500] if exc.response is not None else ""
+            raise ApiError(f"Zernio analytics HTTP error: {exc} :: {body}") from exc
+        except (requests.RequestException, ValueError) as exc:
+            raise ApiError(f"Zernio analytics request failed: {exc}") from exc
 
     @staticmethod
     def extract_post_id(data: Dict[str, Any]) -> Optional[str]:

@@ -254,15 +254,9 @@ class Config:
     # --- Pinterest board (still needed regardless of how posting happens) ---
     pinterest_board_id: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_BOARD_ID"))
 
-    # --- Pinterest API v5 (direct) --- kept only for analytics_pull.py; NOT
-    # used for posting — see Zernio below, the active posting path.
-    pinterest_access_token: Optional[str] = field(default_factory=lambda: _env_str("PINTEREST_ACCESS_TOKEN"))
-    pinterest_base_url: str = field(
-        default_factory=lambda: _env_str("PINTEREST_BASE_URL", "https://api.pinterest.com/v5")
-    )
-
-    # --- Zernio (https://zernio.com) — third-party scheduler actually used to
-    # post to Pinterest, in place of Pinterest's own API v5. Per
+    # --- Zernio (https://zernio.com) — third-party scheduler used for both
+    # posting to Pinterest and pulling analytics, in place of Pinterest's own
+    # API v5, which this pipeline no longer calls at all. Per
     # https://docs.zernio.com: media must be uploaded first (presigned URL
     # flow) to get a public URL, then referenced in the create-post call.
     zernio_api_key: Optional[str] = field(default_factory=lambda: _env_str("ZERNIO_API_KEY"))
@@ -272,6 +266,9 @@ class Config:
     zernio_pinterest_account_id: Optional[str] = field(
         default_factory=lambda: _env_str("ZERNIO_PINTEREST_ACCOUNT_ID")
     )
+    # How many days back analytics_pull.py requests on each run (Zernio's
+    # Analytics API takes an explicit fromDate/toDate range, not a pin list).
+    analytics_lookback_days: int = field(default_factory=lambda: _env_int("ANALYTICS_LOOKBACK_DAYS", 30))
 
     # --- Data source for Amazon product candidates (scout) ---
     product_source_url: Optional[str] = field(default_factory=lambda: _env_str("PRODUCT_SOURCE_URL"))
