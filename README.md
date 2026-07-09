@@ -420,11 +420,16 @@ set -a; source .env; set +a
 exec .venv/bin/python run_cycle.py "$@"
 ```
 
+Times below are tuned to Pinterest's observed engagement windows (late
+morning–early afternoon and 8–11 PM, evenings skewing stronger). Cron times
+are the **server's local timezone** — adjust if that doesn't match your
+target audience's timezone.
+
 ```cron
-# m  h            command
-  15 8,12,17,21  /opt/affiliate-engine/run.sh            >> /var/log/affiliate/cycle.log 2>&1
-  0  3           /opt/affiliate-engine/run.sh --pull-analytics >> /var/log/affiliate/analytics.log 2>&1
-  0  */4         /opt/affiliate-engine/run.sh --check-deadman  >> /var/log/affiliate/deadman.log 2>&1
+# m  h                command
+  30 9,12,20,22   /opt/affiliate-engine/run.sh                  >> /var/log/affiliate/cycle.log 2>&1
+  0  3            /opt/affiliate-engine/run.sh --pull-analytics >> /var/log/affiliate/analytics.log 2>&1
+  0  */4          /opt/affiliate-engine/run.sh --check-deadman  >> /var/log/affiliate/deadman.log 2>&1
 ```
 
 The pipeline is idempotent per invocation and safe to run unattended: budget
